@@ -1295,8 +1295,8 @@ export default {
   'Press Enter or wait 2s to complete authentication':
     '按 Enter 或等待 2s 完成认证',
   'Agent Key Sharing': 'Agent Key 共享',
-  "Share an installed Agent's API Key with cosh for auto-configuration?":
-    '是否将已安装 Agent 的 API Key 共享给 cosh 进行自动配置？',
+  'Authorize importing API keys from the configuration file of installed agents for automatic configuration? Choose an Agent or manually configure it.':
+    '授权从已安装的 Agent 的配置文件中导入API密钥以进行自动配置？选择一个 Agent 或手动配置。',
   'No, configure manually': '不需要，手动配置',
   'No API Key found for {{agentName}}.': '未检测到 {{agentName}} 的 API Key。',
   'Returning to agent selection...': '正在返回 Agent 选择页面……',

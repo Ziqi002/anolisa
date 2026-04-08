@@ -1461,8 +1461,8 @@ export default {
   'Press Enter or wait 2s to complete authentication':
     'Press Enter or wait 2s to complete authentication',
   'Agent Key Sharing': 'Agent Key Sharing',
-  "Share an installed Agent's API Key with cosh for auto-configuration?":
-    "Share an installed Agent's API Key with cosh for auto-configuration?",
+  'Authorize importing API keys from the configuration file of installed agents for automatic configuration? Choose an Agent or manually configure it.':
+    'Authorize importing API keys from the configuration file of installed agents for automatic configuration? Choose an Agent or manually configure it.',
   'No, configure manually': 'No, configure manually',
   'No API Key found for {{agentName}}.': 'No API Key found for {{agentName}}.',
   'Returning to agent selection...': 'Returning to agent selection...',

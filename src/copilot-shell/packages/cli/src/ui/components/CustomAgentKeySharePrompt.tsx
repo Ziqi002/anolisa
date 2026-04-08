@@ -74,7 +74,7 @@ export function CustomAgentKeySharePrompt({
       <Box marginTop={1}>
         <Text>
           {t(
-            "Share an installed Agent's API Key with cosh for auto-configuration?",
+            'Authorize importing API keys from the configuration file of installed agents for automatic configuration? Choose an Agent or manually configure it.',
           )}
         </Text>
       </Box>
