@@ -65,7 +65,7 @@ function EcsAuthStaticDisplay({
       </Box>
       {consoleUrl && (
         <Box marginTop={1} flexDirection="column">
-          <Link url={consoleUrl} fallback={true}>
+          <Link url={consoleUrl} fallback={false}>
             <Text color={Colors.AccentBlue}>{consoleUrl}</Text>
           </Link>
         </Box>
