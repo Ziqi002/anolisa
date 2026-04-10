@@ -12,12 +12,8 @@ const execAsync = promisify(exec);
 // ECS 元数据服务地址
 const ECS_METADATA_ENDPOINT = 'http://100.100.100.200';
 
-// 联调版管控链接模板
+// 管控链接模板
 const ALINUX_CONSOLE_URL_TEMPLATE =
-  'https://pre-alinux.console.aliyun.com/guide/cosh?source=cosh&instance={instanceId}';
-
-// 生产版管控链接模板（后续可切换）
-const ALINUX_CONSOLE_URL_TEMPLATE_PROD =
   'http://alinux.console.aliyun.com/{regionId}/guide/cosh?instance={instanceId}';
 
 // RAM Role 名称
@@ -101,14 +97,11 @@ export async function getECSInstanceInfo(): Promise<ECSInstanceInfo> {
 export function generateConsoleUrl(
   instanceId: string,
   regionId?: string | null,
-  isProd = false,
 ): string {
-  const template = isProd
-    ? ALINUX_CONSOLE_URL_TEMPLATE_PROD
-    : ALINUX_CONSOLE_URL_TEMPLATE;
-  return template
-    .replace('{regionId}', regionId ?? '')
-    .replace('{instanceId}', instanceId);
+  return ALINUX_CONSOLE_URL_TEMPLATE.replace(
+    '{regionId}',
+    regionId ?? '',
+  ).replace('{instanceId}', instanceId);
 }
 
 /**

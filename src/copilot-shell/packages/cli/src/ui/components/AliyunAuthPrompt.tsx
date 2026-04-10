@@ -277,7 +277,7 @@ export function AliyunAuthPrompt({
 
       // 确认在 ECS 上，再获取 regionId 并生成 URL
       const regionId = await getECSRegionId();
-      const url = generateConsoleUrl(instanceId, regionId, true); // 使用正式版
+      const url = generateConsoleUrl(instanceId, regionId);
       setState((prev) => ({
         ...prev,
         step: 'polling_role',
