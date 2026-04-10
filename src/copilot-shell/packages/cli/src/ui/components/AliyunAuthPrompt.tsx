@@ -20,6 +20,7 @@ import {
   AliyunAuthMethod,
   ECS_RAM_ROLE_NAME,
   getECSInstanceId,
+  getECSRegionId,
   generateConsoleUrl,
   pollForECSRamRoleAuthorization,
   getECSRamRoleCredentials,
@@ -242,32 +243,27 @@ export function AliyunAuthPrompt({
   // 初始化：检测环境
   useEffect(() => {
     const detectEnvironment = async () => {
-      // 只获取 instanceId，避免重复调用
+      // 先探测是否在 ECS 上（短超时快速判断）
       const instanceId = await getECSInstanceId();
-
-      if (instanceId) {
-        // 在 ECS 上，直接进入网页认证流程并立即开始轮询
-        const url = generateConsoleUrl(instanceId, true); // 使用正式版
-        setState((prev) => ({
-          ...prev,
-          step: 'polling_role',
-          isOnECS: true,
-          instanceId,
-          consoleUrl: url,
-        }));
-
-        // 开始轮询检测 RAM Role
-        startPollingForRole();
-      } else {
-        // 不在 ECS 上，直接进入 AK/SK 输入页面
-        setState((prev) => ({
-          ...prev,
-          step: 'aksk_input',
-          isOnECS: false,
-          instanceId: null,
-          consoleUrl: null,
-        }));
+      if (!instanceId) {
+        // 不在 ECS 上，进入 AK/SK 输入页面
+        setState((prev) => ({ ...prev, step: 'aksk_input', isOnECS: false }));
+        return;
       }
+
+      // 确认在 ECS 上，再获取 regionId 并生成 URL
+      const regionId = await getECSRegionId();
+      const url = generateConsoleUrl(instanceId, regionId, true); // 使用正式版
+      setState((prev) => ({
+        ...prev,
+        step: 'polling_role',
+        isOnECS: true,
+        instanceId,
+        consoleUrl: url,
+      }));
+
+      // 开始轮询检测 RAM Role
+      startPollingForRole();
     };
 
     detectEnvironment();

@@ -54,6 +54,7 @@ export {
   type STSCredentials,
   AliyunAuthMethod,
   getECSInstanceId,
+  getECSRegionId,
   generateConsoleUrl,
   pollForECSRamRoleAuthorization,
   getECSRamRoleCredentials,

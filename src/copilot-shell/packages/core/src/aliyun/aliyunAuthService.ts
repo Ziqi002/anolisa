@@ -18,7 +18,7 @@ const ALINUX_CONSOLE_URL_TEMPLATE =
 
 // 生产版管控链接模板（后续可切换）
 const ALINUX_CONSOLE_URL_TEMPLATE_PROD =
-  'https://alinux.console.aliyun.com/guide/cosh?instance={instanceId}';
+  'http://alinux.console.aliyun.com/{regionId}/guide/cosh?instance={instanceId}';
 
 // RAM Role 名称
 export const ECS_RAM_ROLE_NAME = 'AliyunECSInstanceForSysomRole';
@@ -66,14 +66,19 @@ export async function getECSInstanceId(): Promise<string | null> {
 
 /**
  * 获取 ECS Region ID
+ * 注意：元数据服务不直接提供 region-id，通过 zone-id 截取末尾字母推导
+ * 例：cn-hangzhou-j → cn-hangzhou
  */
 export async function getECSRegionId(): Promise<string | null> {
   try {
     const { stdout } = await execAsync(
-      `curl -s --connect-timeout 1 --max-time 2 ${ECS_METADATA_ENDPOINT}/latest/meta-data/region-id`,
+      `curl -s --connect-timeout 1 --max-time 2 ${ECS_METADATA_ENDPOINT}/latest/meta-data/zone-id`,
     );
-    const regionId = stdout.trim();
-    return regionId && regionId.length > 0 ? regionId : null;
+    const zoneId = stdout.trim();
+    if (!zoneId || zoneId.length === 0) return null;
+    // 去掉末尾的 -j、-b 等可用区后缀，推导出 region-id
+    const regionId = zoneId.replace(/-[a-z]$/, '');
+    return regionId.length > 0 ? regionId : null;
   } catch {
     return null;
   }
@@ -93,11 +98,17 @@ export async function getECSInstanceInfo(): Promise<ECSInstanceInfo> {
 /**
  * 生成管控链接
  */
-export function generateConsoleUrl(instanceId: string, isProd = false): string {
+export function generateConsoleUrl(
+  instanceId: string,
+  regionId?: string | null,
+  isProd = false,
+): string {
   const template = isProd
     ? ALINUX_CONSOLE_URL_TEMPLATE_PROD
     : ALINUX_CONSOLE_URL_TEMPLATE;
-  return template.replace('{instanceId}', instanceId);
+  return template
+    .replace('{regionId}', regionId ?? '')
+    .replace('{instanceId}', instanceId);
 }
 
 /**
