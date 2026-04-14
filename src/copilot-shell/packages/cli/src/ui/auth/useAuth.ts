@@ -191,6 +191,36 @@ export const useAuthCommand = (
     async (authType: AuthType, credentials?: OpenAICredentials) => {
       try {
         await config.refreshAuth(authType);
+
+        // 验证 API 是否可以成功访问：发送 hello 测试消息
+        try {
+          const contentGenerator = config.getContentGenerator();
+          const contentGeneratorConfig = config.getContentGeneratorConfig();
+          const abortController = new AbortController();
+          const timeout = setTimeout(() => abortController.abort(), 30000);
+          try {
+            await contentGenerator.generateContent(
+              {
+                model: contentGeneratorConfig.model,
+                contents: [{ role: 'user', parts: [{ text: 'hello' }] }],
+                config: {
+                  abortSignal: abortController.signal,
+                },
+              },
+              'auth-verification',
+            );
+          } finally {
+            clearTimeout(timeout);
+          }
+        } catch (verifyError) {
+          throw new Error(
+            t(
+              'Authentication credentials were saved, but API verification failed: {{message}}',
+              { message: getErrorMessage(verifyError) },
+            ),
+          );
+        }
+
         handleAuthSuccess(authType, credentials);
       } catch (e) {
         handleAuthFailure(e);
