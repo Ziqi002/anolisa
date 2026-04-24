@@ -23,6 +23,7 @@ import type { LoadedSettings } from '../../config/settings.js';
 import { getPersistScopeForModelSelection } from '../../config/modelProvidersScope.js';
 import type { OpenAICredentials } from '../components/OpenAIKeyPrompt.js';
 import { useQwenAuth } from '../hooks/useQwenAuth.js';
+import { appEvents, AppEvent } from '../../utils/events.js';
 import { AuthState, MessageType } from '../types.js';
 import type { HistoryItem } from '../types.js';
 import { t } from '../../i18n/index.js';
@@ -33,6 +34,7 @@ export const useAuthCommand = (
   settings: LoadedSettings,
   config: Config,
   addItem: (item: Omit<HistoryItem, 'id'>, timestamp: number) => void,
+  showBashOptionOnStartup: boolean,
 ) => {
   const unAuthenticated = config.getAuthType() === undefined;
 
@@ -44,6 +46,9 @@ export const useAuthCommand = (
 
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [isAuthDialogOpen, setIsAuthDialogOpen] = useState(unAuthenticated);
+  const [showBashOptionInAuthDialog, setShowBashOptionInAuthDialog] = useState(
+    showBashOptionOnStartup,
+  );
   const [pendingAuthType, setPendingAuthType] = useState<AuthType | undefined>(
     undefined,
   );
@@ -64,17 +69,43 @@ export const useAuthCommand = (
     [setAuthError, setAuthState],
   );
 
+  /**
+   * Translate authentication error messages for i18n support.
+   * Matches known error patterns and returns translated messages.
+   */
+  const translateAuthError = useCallback((error: unknown): string => {
+    const message = getErrorMessage(error);
+
+    // Try to match the message with known error patterns for i18n
+    if (message.includes('Invalid API key')) {
+      return t('Invalid API key. Please check your API key and try again.');
+    }
+    if (message.includes('does not have permission')) {
+      return t('API key does not have permission to access this resource.');
+    }
+    if (message.includes('Rate limit exceeded')) {
+      return t('Rate limit exceeded. Please check your quota.');
+    }
+    if (message.includes('is not available')) {
+      // Extract model name from message: Model "xxx" is not available
+      const modelMatch = message.match(/Model "([^"]+)" is not available/);
+      if (modelMatch) {
+        return t(
+          'Model "{{model}}" is not available. Please check if the model name is correct.',
+          { model: modelMatch[1] },
+        );
+      }
+    }
+
+    // Fallback: use the original message
+    return message;
+  }, []);
+
   const handleAuthFailure = useCallback(
     (error: unknown) => {
-      setIsAuthenticating(false);
-      setIsAuthDialogOpen(true); // Reopen dialog to show error
-
       const errorMessage = t('Failed to authenticate. Message: {{message}}', {
-        message: getErrorMessage(error),
+        message: translateAuthError(error),
       });
-
-      setAuthError(errorMessage); // Set the error state
-      onAuthError(errorMessage); // Also call the external error handler
 
       // Log authentication failure
       if (pendingAuthType) {
@@ -86,8 +117,23 @@ export const useAuthCommand = (
         );
         logAuth(config, authEvent);
       }
+
+      // For OpenAI auth, keep OpenAIKeyPrompt open to show error
+      // by NOT calling onAuthError which would open AuthDialog
+      if (pendingAuthType === AuthType.USE_OPENAI) {
+        // Only set authError state, don't open AuthDialog
+        // OpenAIKeyPrompt will read authError from UIStateContext and display it
+        setAuthError(errorMessage);
+        // Keep isAuthenticating=true so OpenAIKeyPrompt stays open
+        // User can press Escape to cancel and go back to AuthDialog
+      } else {
+        // For other auth types, use onAuthError which opens AuthDialog
+        setIsAuthenticating(false);
+        setShowBashOptionInAuthDialog(false);
+        onAuthError(errorMessage);
+      }
     },
-    [onAuthError, pendingAuthType, config],
+    [translateAuthError, onAuthError, pendingAuthType, config],
   );
 
   const handleAuthSuccess = useCallback(
@@ -190,37 +236,24 @@ export const useAuthCommand = (
   const performAuth = useCallback(
     async (authType: AuthType, credentials?: OpenAICredentials) => {
       try {
+        // Refresh authentication (creates ContentGenerator)
         await config.refreshAuth(authType);
 
-        // 验证 API 是否可以成功访问：发送 hello 测试消息
-        try {
+        // Validate API key for OpenAI auth by making a lightweight API call
+        // This validates both new credentials and existing saved credentials
+        if (authType === AuthType.USE_OPENAI) {
           const contentGenerator = config.getContentGenerator();
-          const contentGeneratorConfig = config.getContentGeneratorConfig();
-          const abortController = new AbortController();
-          const timeout = setTimeout(() => abortController.abort(), 30000);
-          try {
-            await contentGenerator.generateContent(
-              {
-                model: contentGeneratorConfig.model,
-                contents: [{ role: 'user', parts: [{ text: 'hello' }] }],
-                config: {
-                  abortSignal: abortController.signal,
-                },
-              },
-              'auth-verification',
-            );
-          } finally {
-            clearTimeout(timeout);
+          // Check if validateApiKey method exists (it's optional on ContentGenerator interface)
+          // LoggingContentGenerator wraps OpenAIContentGenerator, so we check the method existence
+          if (
+            contentGenerator &&
+            typeof contentGenerator.validateApiKey === 'function'
+          ) {
+            await contentGenerator.validateApiKey();
           }
-        } catch (verifyError) {
-          throw new Error(
-            t(
-              'Authentication credentials were saved, but API verification failed: {{message}}',
-              { message: getErrorMessage(verifyError) },
-            ),
-          );
         }
 
+        // If we get here, authentication and validation succeeded
         handleAuthSuccess(authType, credentials);
       } catch (e) {
         handleAuthFailure(e);
@@ -258,6 +291,7 @@ export const useAuthCommand = (
       credentials?: OpenAICredentials | AliyunCredentialsExtended,
     ) => {
       if (!authType) {
+        setShowBashOptionInAuthDialog(false);
         setIsAuthDialogOpen(false);
         setAuthError(null);
         return;
@@ -281,10 +315,13 @@ export const useAuthCommand = (
 
       setPendingAuthType(authType);
       setAuthError(null);
+      setShowBashOptionInAuthDialog(false);
       setIsAuthDialogOpen(false);
       setIsAuthenticating(true);
 
       if (authType === AuthType.USE_OPENAI) {
+        // Only perform authentication when credentials are provided (from OpenAIKeyPrompt)
+        // When credentials are undefined, DialogManager will show OpenAIKeyPrompt for user input
         if (credentials && 'apiKey' in credentials) {
           // Pass settings.model.generationConfig to updateCredentials so it can be merged
           // after clearing provider-sourced config. This ensures settings.json generationConfig
@@ -301,6 +338,8 @@ export const useAuthCommand = (
           );
           await performAuth(authType, credentials as OpenAICredentials);
         }
+        // If no credentials, just set pendingAuthType and isAuthenticating state
+        // DialogManager will show OpenAIKeyPrompt for user to input credentials
         return;
       }
 
@@ -383,7 +422,19 @@ export const useAuthCommand = (
   );
 
   const openAuthDialog = useCallback(() => {
+    setShowBashOptionInAuthDialog(false);
     setIsAuthDialogOpen(true);
+  }, []);
+
+  const handleContinueToBash = useCallback(() => {
+    setAuthError(null);
+    setIsAuthenticating(false);
+    setShowBashOptionInAuthDialog(false);
+    setIsAuthDialogOpen(false);
+    appEvents.emit(
+      AppEvent.SpawnShell,
+      process.platform === 'win32' ? 'cmd.exe' : 'bash',
+    );
   }, []);
 
   const cancelAuthentication = useCallback(() => {
@@ -399,6 +450,7 @@ export const useAuthCommand = (
 
     // Do not reset pendingAuthType here, persist the previously selected type.
     setIsAuthenticating(false);
+    setShowBashOptionInAuthDialog(false);
     setIsAuthDialogOpen(true);
     setAuthError(null);
   }, [isAuthenticating, pendingAuthType, cancelQwenAuth, config]);
@@ -449,10 +501,12 @@ export const useAuthCommand = (
     authError,
     onAuthError,
     isAuthDialogOpen,
+    showBashOptionInAuthDialog,
     isAuthenticating,
     pendingAuthType,
     qwenAuthState,
     handleAuthSelect,
+    handleContinueToBash,
     openAuthDialog,
     cancelAuthentication,
   };
