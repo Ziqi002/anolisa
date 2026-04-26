@@ -66,6 +66,14 @@
                     "github": "chengshuyi"
                 }
             ]
+        },
+        {
+            "label": "component:ckpt",
+            "maintainers": [
+                {
+                    "github": "Ziqi002"
+                }
+            ]
         }
     ],
     "default": {
