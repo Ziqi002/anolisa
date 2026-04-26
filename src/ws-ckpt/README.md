@@ -142,3 +142,14 @@ cargo clippy --workspace -- -D warnings
 
 - [使用文档](docs/ws-ckpt-usage.md)
 - [RPM 打包](docs/RPM-PACKAGING.md)
+
+## License
+
+Licensed under the Apache License, Version 2.0; see [LICENSE](../../LICENSE).
+
+ws-ckpt interacts with the Linux kernel btrfs filesystem (GPL-2.0) solely through the
+public system call interface, and invokes `btrfs-progs` (GPL-2.0) exclusively as
+independent executable processes. No source code, object code, or header files from any
+GPL-licensed component are incorporated, statically linked, or dynamically linked into
+ws-ckpt. Such interaction constitutes an independent and separate work within the meaning
+of GPL-2.0 Section 2 ("mere aggregation") and imposes no copyleft obligation on ws-ckpt.
