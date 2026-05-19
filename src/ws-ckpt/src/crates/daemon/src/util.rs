@@ -42,6 +42,34 @@ pub async fn run_command_checked(cmd: &str, args: &[&str]) -> anyhow::Result<()>
     Ok(())
 }
 
+/// Decode `\NNN` octal escapes used by /proc/mounts for whitespace and
+/// backslashes in mount-point paths (e.g. space → \040, tab → \011).
+/// Unrecognised sequences are left literal so a malformed line never panics.
+pub fn unescape_proc_mount(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\\' && i + 3 < bytes.len() {
+            let d0 = bytes[i + 1];
+            let d1 = bytes[i + 2];
+            let d2 = bytes[i + 3];
+            if (b'0'..=b'7').contains(&d0)
+                && (b'0'..=b'7').contains(&d1)
+                && (b'0'..=b'7').contains(&d2)
+            {
+                let v = ((d0 - b'0') << 6) | ((d1 - b'0') << 3) | (d2 - b'0');
+                out.push(v);
+                i += 4;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// Return true if `mount_path` appears in `/proc/mounts`.
 pub async fn is_mounted(mount_path: &str) -> anyhow::Result<bool> {
     let target = Path::new(mount_path);
@@ -55,7 +83,8 @@ pub async fn is_mounted(mount_path: &str) -> anyhow::Result<bool> {
     while let Some(line) = reader.next_line().await? {
         let parts: Vec<&str> = line.split_whitespace().collect();
         if let Some(mp) = parts.get(1) {
-            let mp_path = Path::new(mp);
+            let decoded = unescape_proc_mount(mp);
+            let mp_path = Path::new(&decoded);
             if mp_path == target || mp_path.components().collect::<PathBuf>() == target_norm {
                 return Ok(true);
             }
@@ -105,6 +134,10 @@ pub async fn ensure_symlinks(state: &DaemonState) {
 /// Atomically replace the symlink via temp-file + rename.
 async fn rebuild_symlink(ws_path: &str, expected_subvol_path: &Path) {
     let tmp_path = format!("{}.tmp", ws_path);
+    // Best-effort cleanup of leftover residue from a prior daemon crash between
+    // symlink() and rename(); without this, symlink() returns EEXIST and
+    // recovery wedges permanently for this workspace.
+    let _ = tokio::fs::remove_file(&tmp_path).await;
     if let Err(e) = tokio::fs::symlink(expected_subvol_path, &tmp_path).await {
         warn!("failed to create temp symlink for {}: {}", ws_path, e);
         return;
