@@ -1,0 +1,13 @@
+name: ws-ckpt
+version: "0.1.0"
+description: "Workspace checkpoint on each conversation turn via ws-ckpt daemon"
+provides_tools:
+  - ws_ckpt_list
+  - ws_ckpt_checkpoint
+  - ws_ckpt_rollback
+  - ws_ckpt_delete
+  - ws_ckpt_status
+provides_hooks:
+  - on_session_start
+  - pre_llm_call
+  - on_session_end
