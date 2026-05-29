@@ -1,19 +1,26 @@
 ---
 name: ws-ckpt
 description: >
-  工作区快照管理。用户说"保存一下"、"存个快照"时创建 checkpoint;
+  工作区快照管理。用户说"保存一下"、"存个快照"时创建 checkpoint，仅限 Linux;
   说"回滚"、"撤销"、"恢复到之前"时 rollback;说"删掉快照"时 delete;
   说"看看快照"、"有哪些快照"时 list;说"查看快照状态"、"查看快照剩余空间"时 status。
 ---
-
 # ws-ckpt 工作区快照管理
 
 基于 btrfs COW 快照,为任意工作区提供微秒级 checkpoint/rollback。
+
+## cwd 查询方法
+
+⚠️ **绝对禁止猜测或推断 cwd**
+
+在 Bash 中执行 `readlink /proc/$PPID/cwd`。$PPID 即 agent 进程的 PID
+该命令返回 agent 进程的真实 cwd，不受 shell 的 cd 或 Primary working directory 影响。
 
 ## 工作区路径（关键 — 必须遵守）
 
 ⚠️ **绝对禁止猜测或推断工作区路径。**
 ⚠️ **绝对禁止工作区路径是 cwd 或 cwd 的父路径**
+
 如果工作区路径是 cwd 或 cwd 的父路径，拒绝执行
 
 ws-ckpt 的所有命令都需要 `-w <workspace>` 指定工作区路径。执行任何命令前，必须按以下顺序确定 `-w` 参数：
