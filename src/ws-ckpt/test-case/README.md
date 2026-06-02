@@ -43,3 +43,28 @@ bash test-case/main/2026-05-20.sh
 
 - **main**: 全量 `git log main -- src/ws-ckpt/` 历史,按日期增量追加新的 `YYYY-MM-DD.{md,sh}`
 - **其它分支**: 仅 `git log main..<branch> -- src/ws-ckpt/` 领先 commit;脚本顶部用 `tc_require_branch` 守卫,分支未合并到 HEAD 时整体 SKIP
+
+## 周期合并规则
+
+- 每周日把本周「已审核通过」的 md + bash 合并为单一 md + bash，避免文件累积（去掉 `状态：待审核` 标注后再合并）。
+- 非周日的增量运行只追加当日 `YYYY-MM-DD.{md,sh}`，不做合并。
+
+## 覆盖日志
+
+| 日期 | 分支目录 | 覆盖范围 | 状态 |
+|------|----------|----------|------|
+| 2026-05-20 | main | v0.1.0~v0.2.x 基线 | 已审核 |
+| 2026-05-25 | main | v0.3.0（17 commits） | 待审核 |
+| 2026-05-25 | feat-ckpt-temp | 领先 commit | 待审核 |
+| 2026-05-27 | feat-ckpt-bug-fix | 5 bug-fix commits | 待审核 |
+| 2026-06-02 | main | v0.3.1 + v0.3.2（14 commits） | 待审核 |
+| 2026-06-02 | fix-ckpt-bug-fix-615 | 3 领先 commit（含 issue#669 cwd 守卫） | 待审核 |
+
+### 2026-06-02 增量说明
+
+- 扫描所有本地分支（忽略 tag 与 ckpt-test）。本次新增覆盖：
+  - **main**：自 v0.3.0 (577f3ff) 以来落入的 14 个 ws-ckpt commit（v0.3.1 + v0.3.2）。
+  - **fix/ckpt/bug-fix-615**：领先 main 的 3 个 commit，核心是 issue#669 的 /proc cwd 占用守卫。
+- **release/ckpt/v0.3.1 已跳过（冗余）**：其领先 main 的 ws-ckpt commit（`846c2c6`）与 main 上的 `79fd8d3` 内容完全一致（`git diff` 为空），且该分支整体落后于 main，无独有 ws-ckpt 变更，故不单独建用例。其余 release 分支领先 commit 数为 0。
+- **已知缺陷（待开发确认）**：`fix-ckpt-bug-fix-615/2026-06-02` 的用例 **3.10 为有意 FAIL 的缺陷探针** —— commit `5bc4e2a` 声称 cwd 守卫覆盖 `init/rollback`，但 `guard_cwd_occupants` 仅接入 `init`（`workspace_mgr.rs:247`），`rollback` 路径未调用。详见该 md 的「缺陷发现」。
+
