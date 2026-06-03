@@ -59,6 +59,21 @@ bash test-case/main/2026-05-20.sh
 | 2026-05-27 | feat-ckpt-bug-fix | 5 bug-fix commits | 待审核 |
 | 2026-06-02 | main | v0.3.1 + v0.3.2（14 commits） | 待审核 |
 | 2026-06-02 | fix-ckpt-bug-fix-615 | 3 领先 commit（含 issue#669 cwd 守卫） | 待审核 |
+| 2026-06-03 | main | Hermes adapter runner（1 commit, 99ba08a） | 待审核 |
+| 2026-06-03 | fix-ckpt-bug-fix-669 | 4 领先 commit（issue#669 收口 + rollback 守卫回归） | 待审核 |
+| 2026-06-03 | fix-ckpt-bug-fix-672 | 1 领先 commit（snapshot id 解析层校验） | 待审核 |
+
+### 2026-06-03 增量说明
+
+- 扫描所有本地分支（忽略 tag 与 ckpt-test）。本次新增覆盖：
+  - **main**：自上次（2026-06-02 覆盖到 v0.3.2 / `6efd77a`）以来唯一新落入的 ws-ckpt commit `99ba08a`（Hermes adapter runner：新增只读 `detect-hermes.sh`、manifest/Makefile 登记、`install-hermes.sh` 支持 `HERMES_HOME` 覆盖与 `ANOLISA_DRY_RUN` 干跑）。实跑验证：16 PASS / 0 FAIL / 3 SKIP（DRY-RUN 因 adapter 源不可见而 SKIP）。
+  - **fix/ckpt/bug-fix-669**：领先 main 的 4 个 commit，issue#669 cwd 守卫正式收口。实跑验证：22 PASS / 0 FAIL / 1 SKIP（集成测试需 root）。
+  - **fix/ckpt/bug-fix-672**：领先 main 的 1 个 commit，checkpoint `-i` 解析层拒绝空白/路径分隔符/`.`/`..` id（issue#672）。实跑验证：5 PASS / 0 FAIL / 1 SKIP（CLI 行为断言需二进制）。
+- **旧缺陷已修复（回归确认）**：上一轮 `fix-ckpt-bug-fix-615/2026-06-02` 用例 **3.10** 是有意 FAIL 的探针，指出 rollback 未接入 cwd 守卫。本轮 `fix-ckpt-bug-fix-669/2026-06-03` 用例 **2.2** 在该分支源码上**已转为 PASS**（`snapshot_mgr.rs` rollback 前调用 `guard_cwd_occupants`），证明 issue#669 已把守卫接入 init **和** rollback 双路径。
+- **跳过的分支**：
+  - `release/ckpt/v0.3.1`：领先 main 的 2 个 ws-ckpt commit（`846c2c6` / `b887fdc`），其中 `846c2c6` 与 main 上 `79fd8d3` 的 ws-ckpt 改动 `git diff` 完全一致（冗余），无独有变更，不单独建用例（沿用 2026-06-02 判定）。
+  - 其余分支（`fix/ckpt/bug-fix-672` 之外的 release/* 及 `local-cleanup`）领先 main 的 ws-ckpt commit 数为 0。
+- **周期合并**：今天是 2026-06-03（周三），非周日，按规则**不做合并**，仅追加当日增量文件。
 
 ### 2026-06-02 增量说明
 
