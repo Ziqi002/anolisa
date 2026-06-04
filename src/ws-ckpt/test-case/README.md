@@ -62,6 +62,22 @@ bash test-case/main/2026-05-20.sh
 | 2026-06-03 | main | Hermes adapter runner（1 commit, 99ba08a） | 待审核 |
 | 2026-06-03 | fix-ckpt-bug-fix-669 | 4 领先 commit（issue#669 收口 + rollback 守卫回归） | 待审核 |
 | 2026-06-03 | fix-ckpt-bug-fix-672 | 1 领先 commit（snapshot id 解析层校验） | 待审核 |
+| 2026-06-04 | bug-fix-673 | 1 领先 commit（init 失败数据保全 #673） | 待审核 |
+| 2026-06-04 | bug-fix-674-685-686 | 3 领先 commit（rsync bail #674 / registry lock-free #685 / seccomp arch #686） | 待审核 |
+| 2026-06-04 | fix-ckpt-bug-fix-669 | +1 增量 commit（plugin error mapper 加固 32dd1d8） | 待审核 |
+
+### 2026-06-04 增量说明
+
+- 扫描所有本地分支（忽略 tag 与 ckpt-test）。本次新增覆盖：
+  - **main**：自上次（2026-06-03 覆盖到 `99ba08a`）以来仅有 `6e57f5d`(temp) + `7e1f206`(Revert "temp")，net diff 为空，**无需新增用例**。
+  - **bug-fix-673**（新分支）：领先 main 的 1 个 commit `dc40b14`，init_workspace 失败时 rename 替代 remove_dir_all 保全用户数据。静态断言 13 项。
+  - **bug-fix-674-685-686**（新分支）：领先 main 的 3 个 commit，修复三个独立 daemon 问题（rsync bail / write-lock registry / seccomp TargetArch）。静态断言 15 项。
+  - **fix/ckpt/bug-fix-669**（增量）：新增第 5 个 commit `32dd1d8`（plugin error mapper hardening），修复 CwdScanFailed 被误报为 "Snapshot not found" 的优先级 bug。静态断言 10 项。
+- **跳过的分支**：
+  - `fix/ckpt/bug-fix-672`：commit SHA 因 rebase 变化（`ecc9017`），但改动内容与上次覆盖一致，不重复。
+  - `local-cleanup`：仅 1 个 "temp" commit（WIP 大重构），不建用例。
+  - `release/ckpt/v0.3.1`：仍冗余（同 2026-06-02 判定）。`release/ckpt/v0.3.2` 领先 commit 数为 0。
+- **周期合并**：今天是 2026-06-04（周三），非周日，按规则**不做合并**，仅追加当日增量文件。
 
 ### 2026-06-03 增量说明
 
