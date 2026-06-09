@@ -65,6 +65,33 @@ bash test-case/main/2026-05-20.sh
 | 2026-06-04 | bug-fix-673 | 1 领先 commit（init 失败数据保全 #673） | 待审核 |
 | 2026-06-04 | bug-fix-674-685-686 | 3 领先 commit（rsync bail #674 / registry lock-free #685 / seccomp arch #686） | 待审核 |
 | 2026-06-04 | fix-ckpt-bug-fix-669 | +1 增量 commit（plugin error mapper 加固 32dd1d8） | 待审核 |
+| 2026-06-09 | main | v0.3.3：per-workspace policy override 端到端（含 hermes/openclaw）+ init 数据安全 + 锁粒度收尾 | 待审核 |
+
+### 2026-06-09 增量说明
+
+- 扫描所有本地分支（忽略 tag 与 ckpt-test）。当前本地仅剩 `main` 与 `release/ckpt/v0.3.3` 两个分支——
+  此前覆盖过的 bug-fix 分支（`bug-fix-673`/`bug-fix-674-685-686`/`fix/ckpt/bug-fix-669`/`fix/ckpt/bug-fix-672`）
+  已合并进 main 并删除，相关改动不重复测。
+- 本次新增覆盖：
+  - **main**：自上次基线 `99ba08a`（2026-06-03）以来落入的完整 **v0.3.3** 周期。核心是
+    `0e04853` + `44607ee` 的 **per-workspace policy override（按工作区粒度清理策略覆盖）**
+    端到端新特性，贯穿 common（3 个 versioned JSON schema：`ws-ckpt-policy/v1`、`ws-ckpt-config/v1`、
+    `ws-ckpt-overview/v1` + 新 IPC 变体 + `PolicyFieldOp`）、daemon（`lock_wsid` 串行化、recover 清空
+    per-ws index dir）、cli（`config -g/-w/--reset/--format json`，scope 互斥与 overview 视图）、
+    skill（`SKILL.md` config 段）、plugin（openclaw `config.ts` + hermes `tools.py` 的 parse-error/
+    disabled/count/age 辨识联合解析，信任 daemon 预计算 `is_disabled`，严格整数校验）。附加 init 数据安全
+    （`b6155bb`/`605a760`/`8952d60`：`.pre-init-bak` rename、`cp --reflink=always`、foreign-backup 安全）
+    与锁粒度/原子写收尾（`822bfda`/`3c2f421`/`a60d468`/`d3089d3`）。
+  - 实跑验证（main 源码 worktree）：**54 PASS / 0 FAIL / 2 SKIP**（SKIP 为需 `ws-ckpt` 二进制的 version
+    与 scope 互斥 CLI 行为，Mac 上无二进制）。
+- **跳过的分支**：
+  - `release/ckpt/v0.3.3`：领先 main 的 2 个 commit 仅为 `docs(ckpt)`（与 main `e94aba4` 内容一致）
+    + `chore(ckpt): release v0.3.3` 打 tag，且整体落后 main 11 个 commit，无独有 ws-ckpt 行为变更，
+    不单独建用例（沿用历次 release 分支冗余判定规则）。
+- **已合并 bug-fix 提交不重复测**：`591abda`/`fa1bef6`/`f4e6486`/`0f62235`/`cdc839f`/`5002255`/
+  `81b4e7a`/`9094baa`/`f29faf3`/`e1f51fa`/`48d878c` 等已在各 bug-fix 分支目录历史用例覆盖。
+- **周期合并**：今天是 2026-06-09（周二），**非周日**，按规则不做合并，仅追加当日增量文件。
+- 下次扫描基线：main 最新 ckpt commit `3d0a4cf`（release v0.3.3）。
 
 ### 2026-06-04 增量说明
 
