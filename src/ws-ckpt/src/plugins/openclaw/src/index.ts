@@ -146,6 +146,7 @@ export { register };
 // Re-export components for external consumers
 export { BtrfsManager } from "./btrfs-manager.js";
 export { CommandExecutor } from "./commands.js";
+export { CrontabManager } from "./cron.js";
 export { SnapshotStore } from "./snapshot-store.js";
 export { PluginConfigManager, DEFAULT_CONFIG } from "./config.js";
 export { EnvironmentChecker } from "./environment-check.js";

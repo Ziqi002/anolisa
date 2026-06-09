@@ -10,6 +10,7 @@ import { mapErrorToLLMMessage } from "./btrfs-manager.js";
 import type { AgentToolResult } from "../types-shim.js";
 import { pluginState, UNAVAILABLE_MSG, cwdInsideWorkspace, cwdInsideWorkspaceReason } from "./state.js";
 import { parseWorkspaceCleanupJson } from "./config.js";
+import { CrontabManager, parseSchedulesUpdate } from "./cron.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -279,6 +280,26 @@ export async function handleConfig(
         break;
     }
     lines.push(`  workspace: ${cfg.workspace}`);
+    // Show cron schedules grouped by workspace
+    const cronAll = cfg.cronSchedules ?? {};
+    const hasAny = Object.values(cronAll).some((v) => v.length > 0);
+    if (hasAny) {
+      const active = cronAll[cfg.workspace] ?? [];
+      if (active.length > 0) {
+        lines.push("");
+        lines.push(`  cronSchedules (active — ${cfg.workspace}):`);
+        for (const expr of active) lines.push(`    - ${expr}`);
+      }
+      for (const [cronWs, exprs] of Object.entries(cronAll)) {
+        if (cronWs !== cfg.workspace && exprs.length > 0) {
+          lines.push("");
+          lines.push(`  cronSchedules (inactive — ${cronWs}):`);
+          for (const expr of exprs) lines.push(`    - ${expr}`);
+        }
+      }
+    } else {
+      lines.push("  cronSchedules:  (disabled)");
+    }
     lines.push("\nNote: maxSnapshotsNum / maxSnapshotsDuration are this workspace's effective auto-cleanup policy (per-ws override on top of the daemon default).");
     if (parsed.kind === "parse-error") {
       lines.push(`\n(daemon response did not match expected schema: ${parsed.reason})`);
@@ -289,7 +310,7 @@ export async function handleConfig(
   if (act === "update" || act === "set") {
     if (!key) {
       return {
-        text: "Usage: ws-ckpt-config update <key> <value>\n  Available keys: autoCheckpoint, maxSnapshotsNum, maxSnapshotsDuration, workspace",
+        text: "Usage: ws-ckpt-config update <key> <value>\n  Available keys: autoCheckpoint, cronSchedules, maxSnapshotsNum, maxSnapshotsDuration, workspace",
         isError: true,
       };
     }
@@ -392,15 +413,51 @@ export async function handleConfig(
       if (!value) {
         return { text: "workspace requires a path value", isError: true };
       }
+      const oldWs = pluginState.resolvedConfig.workspace;
       pluginState.resolvedConfig.workspace = value;
+      const warnings = await CrontabManager.migrate(
+        oldWs, value, pluginState.resolvedConfig.cronSchedules
+      );
+      let msg = `Config updated: workspace = ${value} (in-memory, will reset on Gateway restart)`;
+      if (warnings.length > 0) msg += "\n\n" + warnings.join("\n");
+      return { text: msg, isError: false };
+    }
+
+    if (key === "cronSchedules") {
+      if (value === undefined) {
+        return {
+          text: 'cronSchedules requires a value. Use: add "EXPR", remove "EXPR", or set \'["EXPR"]\'',
+          isError: true,
+        };
+      }
+      const ws = pluginState.resolvedConfig.workspace;
+      if (!ws) {
+        return { text: "No workspace configured", isError: true };
+      }
+      const cronMap = pluginState.resolvedConfig.cronSchedules;
+      const current = [...(cronMap[ws] ?? [])];
+      const parsed = parseSchedulesUpdate(value, current);
+      if ("error" in parsed) {
+        return { text: parsed.error, isError: true };
+      }
+      if (parsed.schedules.length > 0) {
+        cronMap[ws] = parsed.schedules;
+      } else {
+        delete cronMap[ws];
+      }
+      let cronWarning = "";
+      if (!(await CrontabManager.syncWithRetry(ws, parsed.schedules))) {
+        cronWarning = "\n\nWARNING: Failed to sync crontab after 3 attempts. " +
+          "Config saved but cron snapshots will not run until next session start or manual retry.";
+      }
       return {
-        text: `Config updated: workspace = ${value} (in-memory, will reset on Gateway restart)`,
+        text: `cronSchedules updated for ${ws}: ${parsed.schedules.length > 0 ? JSON.stringify(parsed.schedules) : "(disabled)"}` + cronWarning,
         isError: false,
       };
     }
 
     return {
-      text: `Unknown config key: ${key}. Available: autoCheckpoint, maxSnapshotsNum, maxSnapshotsDuration, workspace`,
+      text: `Unknown config key: ${key}. Available: autoCheckpoint, cronSchedules, maxSnapshotsNum, maxSnapshotsDuration, workspace`,
       isError: true,
     };
   }
