@@ -66,6 +66,33 @@ bash test-case/main/2026-05-20.sh
 | 2026-06-04 | bug-fix-674-685-686 | 3 领先 commit（rsync bail #674 / registry lock-free #685 / seccomp arch #686） | 待审核 |
 | 2026-06-04 | fix-ckpt-bug-fix-669 | +1 增量 commit（plugin error mapper 加固 32dd1d8） | 待审核 |
 | 2026-06-09 | main | v0.3.3：per-workspace policy override 端到端（含 hermes/openclaw）+ init 数据安全 + 锁粒度收尾 | 待审核 |
+| 2026-06-11 | feat-ckpt-cron-ckpt | 1 领先 commit（cron 定时快照，hermes+openclaw 双实现 3acc1cf） | 待审核 |
+| 2026-06-11 | feat-ckpt-overlayfs-backend | 1 领先 commit（OverlayFS 第三后端 + 层数上限保护 42369bc，WIP） | 待审核 |
+
+### 2026-06-11 增量说明
+
+- 扫描所有本地分支（忽略 tag 与 ckpt-test）。当前本地分支：`main`、`ckpt-test`、
+  `release/ckpt/v0.3.3`、`feat/ckpt/cron-ckpt`、`feat/ckpt-overlayfs-backend`、`ws-ckpt/docs-design-proposal`。
+- 本次新增覆盖：
+  - **feat/ckpt/cron-ckpt**（新分支）：领先 main 的 1 个 commit `3acc1cf`，为 hermes(Python) 与
+    openclaw(TypeScript) 两套 runtime plugin 引入**按工作区维度的 cron 定时快照**。覆盖 cron 表达式
+    校验、`add/remove/set` 解析、crontab 行命令构造（含 shell 单引号转义防注入）、flock/mkdir 互斥防
+    TOCTOU、workspace 切换迁移、`runCrontab` 临时文件输入。静态契约 + python3 纯函数动态双重断言。
+    实跑：**46 PASS / 0 FAIL / 1 SKIP**（SKIP 为 openclaw node 动态——其 import 链拉起运行时模块在隔离
+    环境被 SIGKILL，已由 hermes 等价动态断言 + openclaw 静态断言交叉覆盖）。
+  - **feat/ckpt-overlayfs-backend**（新分支）：领先 main 的 1 个 commit `42369bc`（名为 `temp`，WIP，
+    688 行），引入**第三种快照后端 OverlayFS**（动态分层 + 未来 DeltaFS ioctl）。覆盖 common 枚举/常量/
+    新 `ErrorCode::LayerLimitExceeded`、daemon 后端注册、`create_snapshot` 的 soft(450)/hard(500) 层数
+    上限保护、dispatcher 的 `BackendError` downcast 映射、cli 友好提示。实跑：**36 PASS / 0 FAIL / 0 SKIP**
+    （纯静态源码契约；运行时层切换需 Linux+DeltaFS 内核，本轮不实跑）。
+- **跳过的分支**：
+  - `main`：自上次基线 `3d0a4cf`（2026-06-09 v0.3.3）以来无新的 ws-ckpt commit，不新增 main 用例。
+  - `ws-ckpt/docs-design-proposal`：领先 main 仅 1 个文件改动——设计提案 `.md`（+374 行），
+    无任何 ws-ckpt 行为/源码变更，沿用「纯文档分支不单独建用例」规则跳过。
+  - `release/ckpt/v0.3.3`：领先 main 的 2 个 commit 仅为 `docs(ckpt)`（同 main `e94aba4`）+ release 打 tag，
+    无独有行为变更，且整体落后 main，沿用历次 release 冗余判定跳过。
+- **周期合并**：今天 2026-06-11（周四），**非周日**，按规则不做合并，仅追加当日增量文件。
+- 下次扫描基线：main 最新 ckpt commit `3d0a4cf`（release v0.3.3）。
 
 ### 2026-06-09 增量说明
 
