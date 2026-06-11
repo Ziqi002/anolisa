@@ -421,7 +421,7 @@ pub async fn diff_snapshots(
     state: &Arc<DaemonState>,
     workspace: &str,
     from: &str,
-    to: &str,
+    to: Option<&str>,
 ) -> anyhow::Result<Response> {
     let arc = match state.resolve_workspace(workspace).await {
         Some(a) => a,
@@ -434,12 +434,21 @@ pub async fn diff_snapshots(
         Ok(id) => id,
         Err(e) => return Ok(snapshot_resolve_error_response(from, e)),
     };
-    let to_id = match resolve_snapshot_id(&ws.index, to) {
-        Ok(id) => id,
-        Err(e) => return Ok(snapshot_resolve_error_response(to, e)),
+    let to_id = match to {
+        Some(t) => {
+            let id = match resolve_snapshot_id(&ws.index, t) {
+                Ok(id) => id,
+                Err(e) => return Ok(snapshot_resolve_error_response(t, e)),
+            };
+            Some(id)
+        }
+        None => None,
     };
 
-    let changes = state.backend.diff(&ws.ws_id, &from_id, &to_id).await?;
+    let changes = state
+        .backend
+        .diff(&ws.ws_id, &from_id, to_id.as_deref())
+        .await?;
 
     Ok(Response::DiffOk { changes })
 }
@@ -1040,7 +1049,7 @@ mod tests {
             .insert("real-id".to_string(), make_snapshot_meta(false));
         state.register_workspace("ws-diff".to_string(), PathBuf::from("/home/user/ws"), index);
 
-        let resp = diff_snapshots(&state, "ws-diff", "does-not-exist", "real-id")
+        let resp = diff_snapshots(&state, "ws-diff", "does-not-exist", Some("real-id"))
             .await
             .unwrap();
         match resp {
@@ -1052,7 +1061,7 @@ mod tests {
         }
 
         // Also covers the `to`-side branch.
-        let resp = diff_snapshots(&state, "ws-diff", "real-id", "missing-to")
+        let resp = diff_snapshots(&state, "ws-diff", "real-id", Some("missing-to"))
             .await
             .unwrap();
         match resp {
@@ -1140,7 +1149,7 @@ mod tests {
             &self,
             _: &str,
             _: &str,
-            _: &str,
+            _: Option<&str>,
         ) -> anyhow::Result<Vec<ws_ckpt_common::DiffEntry>> {
             unimplemented!()
         }
