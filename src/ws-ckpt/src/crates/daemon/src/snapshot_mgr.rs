@@ -38,18 +38,28 @@ pub async fn delete_snapshots_locked(
     to_remove: &[String],
     label: &str,
 ) -> CleanupOutcome {
+    // Relink DAG + detach all non-pinned snaps in one write lock (pure memory, no fs I/O).
+    // Holding a single lock eliminates the TOCTOU window where a concurrent
+    // checkpoint/rollback could reference a node we're about to delete.
+    let detached: Vec<(String, SnapshotMeta)> = {
+        let ids: std::collections::HashSet<String> = to_remove.iter().cloned().collect();
+        let mut ws = arc.write().await;
+        ws.index.prune_chain(&ids);
+        to_remove
+            .iter()
+            .filter_map(|snap_id| match ws.index.snapshots.get(snap_id) {
+                Some(m) if !m.pinned => ws
+                    .index
+                    .snapshots
+                    .remove(snap_id)
+                    .map(|m| (snap_id.clone(), m)),
+                _ => None,
+            })
+            .collect()
+    };
     let mut removed = Vec::new();
     let mut failed: Vec<(String, String)> = Vec::new();
-    for snap_id in to_remove {
-        let detached = {
-            let mut ws = arc.write().await;
-            match ws.index.snapshots.get(snap_id) {
-                Some(m) if !m.pinned => ws.index.snapshots.remove(snap_id),
-                _ => None,
-            }
-        };
-        let Some(meta) = detached else { continue };
-
+    for (snap_id, meta) in &detached {
         match state
             .backend
             .cleanup_snapshots(ws_id, std::slice::from_ref(snap_id))
@@ -62,7 +72,7 @@ pub async fn delete_snapshots_locked(
                     .await
                     .index
                     .snapshots
-                    .insert(snap_id.clone(), meta);
+                    .insert(snap_id.clone(), meta.clone());
             }
             Ok(_) => {
                 info!("{}: removed snapshot {}", label, snap_id);
@@ -73,7 +83,7 @@ pub async fn delete_snapshots_locked(
                     .await
                     .index
                     .snapshots
-                    .insert(snap_id.clone(), meta);
+                    .insert(snap_id.clone(), meta.clone());
                 tracing::warn!("{}: backend delete failed for {}: {:#}", label, snap_id, e);
                 failed.push((snap_id.clone(), format!("{:#}", e)));
             }
@@ -201,10 +211,19 @@ pub async fn checkpoint(
         pinned: pin,
         created_at: chrono::Utc::now(),
         missing: false,
+        parent_id: ws.index.head.clone(),
+        child_ids: vec![ws_ckpt_common::LIVE_CHILD.to_string()],
     };
 
-    // 9. Update index
+    // 9. Update index (maintain DAG bidirectional pointers)
+    if let Some(old_head) = ws.index.head.clone() {
+        if let Some(hm) = ws.index.snapshots.get_mut(&old_head) {
+            hm.child_ids.retain(|c| c != ws_ckpt_common::LIVE_CHILD);
+            hm.child_ids.push(snapshot_id.clone());
+        }
+    }
     ws.index.snapshots.insert(snapshot_id.clone(), meta);
+    ws.index.head = Some(snapshot_id.clone());
 
     // 10. Persist index
     index_store::save(&snap_dir, &ws.index).await?;
@@ -225,7 +244,8 @@ pub async fn checkpoint(
 pub async fn rollback(
     state: &Arc<DaemonState>,
     workspace: &str,
-    to: &str,
+    to: Option<&str>,
+    num_ancestors: Option<u32>,
 ) -> anyhow::Result<Response> {
     // 1. Resolve workspace
     let arc = match state.resolve_workspace(workspace).await {
@@ -245,22 +265,39 @@ pub async fn rollback(
     }
 
     // 4. Write lock: validate snapshot + execute rollback
-    let ws = arc.write().await;
+    let mut ws = arc.write().await;
 
-    let resolved_id = match ws.index.resolve_by_prefix(to) {
-        Ok((id, _)) => id.clone(),
-        Err(ResolveError::NotFound) => {
-            return Ok(Response::Error {
-                code: ErrorCode::SnapshotNotFound,
-                message: format!("snapshot not found: {}", to),
-            });
+    let resolved_id = if let Some(n) = num_ancestors {
+        match ws.index.ancestor(n as usize) {
+            Ok((id, _)) => id.clone(),
+            Err(e) => {
+                return Ok(Response::Error {
+                    code: ErrorCode::SnapshotNotFound,
+                    message: e.to_string(),
+                });
+            }
         }
-        Err(ResolveError::Ambiguous(n)) => {
-            return Ok(Response::Error {
-                code: ErrorCode::SnapshotNotFound,
-                message: format!("ambiguous snapshot prefix '{}': {} matches", to, n),
-            });
+    } else if let Some(target) = to {
+        match ws.index.resolve_by_prefix(target) {
+            Ok((id, _)) => id.clone(),
+            Err(ResolveError::NotFound) => {
+                return Ok(Response::Error {
+                    code: ErrorCode::SnapshotNotFound,
+                    message: format!("snapshot not found: {}", target),
+                });
+            }
+            Err(ResolveError::Ambiguous(n)) => {
+                return Ok(Response::Error {
+                    code: ErrorCode::SnapshotNotFound,
+                    message: format!("ambiguous snapshot prefix '{}': {} matches", target, n),
+                });
+            }
         }
+    } else {
+        return Ok(Response::Error {
+            code: ErrorCode::SnapshotNotFound,
+            message: "either --snapshot or --num-ancestors must be specified".to_string(),
+        });
     };
 
     if ws
@@ -277,6 +314,29 @@ pub async fn rollback(
 
     // 5. Rollback via backend (includes warmup, snapshot, cleanup)
     state.backend.rollback(&ws.ws_id, &resolved_id).await?;
+
+    // 6. Update head + migrate LIVE_CHILD
+    if let Some(old_head) = ws.index.head.clone() {
+        if let Some(hm) = ws.index.snapshots.get_mut(&old_head) {
+            hm.child_ids.retain(|c| c != ws_ckpt_common::LIVE_CHILD);
+        }
+    }
+    if let Some(hm) = ws.index.snapshots.get_mut(&resolved_id) {
+        if !hm
+            .child_ids
+            .contains(&ws_ckpt_common::LIVE_CHILD.to_string())
+        {
+            hm.child_ids.push(ws_ckpt_common::LIVE_CHILD.to_string());
+        }
+    }
+    ws.index.head = Some(resolved_id.clone());
+    let snap_dir = state.index_dir(&ws.ws_id);
+    if let Err(e) = crate::index_store::save(&snap_dir, &ws.index).await {
+        tracing::warn!(
+            "rollback index save failed (in-memory state is correct): {:#}",
+            e
+        );
+    }
 
     Ok(Response::RollbackOk {
         from: ws.ws_id.clone(),
@@ -510,6 +570,8 @@ mod tests {
             pinned,
             created_at: chrono::Utc::now(),
             missing: false,
+            parent_id: None,
+            child_ids: vec![],
         }
     }
 
@@ -520,6 +582,8 @@ mod tests {
             pinned,
             created_at,
             missing: false,
+            parent_id: None,
+            child_ids: vec![],
         }
     }
 
@@ -676,7 +740,7 @@ mod tests {
             test_backend(),
             test_state_dir(),
         ));
-        let resp = rollback(&state, "/nonexistent/ws/12345", "msg1-step0")
+        let resp = rollback(&state, "/nonexistent/ws/12345", Some("msg1-step0"), None)
             .await
             .unwrap();
         match resp {
@@ -694,7 +758,9 @@ mod tests {
         ));
         let tmpdir = tempfile::tempdir().unwrap();
         let path = tmpdir.path().to_string_lossy().to_string();
-        let resp = rollback(&state, &path, "msg1-step0").await.unwrap();
+        let resp = rollback(&state, &path, Some("msg1-step0"), None)
+            .await
+            .unwrap();
         match resp {
             Response::Error { code, .. } => assert_eq!(code, ErrorCode::WorkspaceNotFound),
             _ => panic!("expected WorkspaceNotFound error"),
@@ -745,6 +811,8 @@ mod tests {
             pinned: true,
             created_at: chrono::Utc::now(),
             missing: false,
+            parent_id: None,
+            child_ids: vec![],
         };
         assert!(pinned.pinned);
 
@@ -754,6 +822,8 @@ mod tests {
             pinned: false,
             created_at: chrono::Utc::now(),
             missing: false,
+            parent_id: None,
+            child_ids: vec![],
         };
         assert!(!unpinned.pinned);
     }
