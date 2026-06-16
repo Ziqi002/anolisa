@@ -447,7 +447,7 @@ def handle_ws_ckpt_config(args: Dict[str, Any], **_kwargs) -> str:
         return _err(
             "Usage: ws-ckpt-config update <key> <value>. "
             "Available keys: autoCheckpoint, workspace, "
-            "maxSnapshotsNum, maxSnapshotsDuration."
+            "cronSchedules, maxSnapshotsNum, maxSnapshotsDuration."
         )
 
     # Persist via `ws-ckpt config -w <workspace>` so the change scopes to a

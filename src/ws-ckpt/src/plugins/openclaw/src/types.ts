@@ -100,7 +100,7 @@ export interface PluginConfig {
   /** Whether to automatically create a checkpoint at end of each turn. */
   autoCheckpoint: boolean;
   /** Scheduled cron snapshots per workspace. Key = workspace path, value = cron expressions. */
-  cronSchedules: Record<string, string[]>;
+  cronSchedules?: Record<string, string[]>;
 }
 
 // ---------------------------------------------------------------------------

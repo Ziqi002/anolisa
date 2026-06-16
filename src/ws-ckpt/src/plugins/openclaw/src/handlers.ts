@@ -434,6 +434,9 @@ export async function handleConfig(
       if (!ws) {
         return { text: "No workspace configured", isError: true };
       }
+      if (!pluginState.resolvedConfig.cronSchedules) {
+        pluginState.resolvedConfig.cronSchedules = {};
+      }
       const cronMap = pluginState.resolvedConfig.cronSchedules;
       const current = [...(cronMap[ws] ?? [])];
       const parsed = parseSchedulesUpdate(value, current);
