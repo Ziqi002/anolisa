@@ -10,6 +10,7 @@ import { mapErrorToLLMMessage } from "./btrfs-manager.js";
 import type { AgentToolResult } from "../types-shim.js";
 import { pluginState, UNAVAILABLE_MSG, cwdInsideWorkspace, cwdInsideWorkspaceReason } from "./state.js";
 import { parseWorkspaceCleanupJson } from "./config.js";
+import { persistConfig } from "./persist.js";
 import { CrontabManager, parseSchedulesUpdate } from "./cron.js";
 
 // ---------------------------------------------------------------------------
@@ -400,11 +401,12 @@ export async function handleConfig(
         }
       }
       pluginState.resolvedConfig.autoCheckpoint = coerced;
-      const persistHint = coerced
-        ? `\n\nNote: This change is in-memory only and will reset on Gateway restart.\nTo persist, run:\n  openclaw config set plugins.entries.ws-ckpt.config.autoCheckpoint true --strict-json\n(This will cause a Gateway restart.)`
-        : `\n\nNote: This change is in-memory only and will reset on Gateway restart.\nTo persist, run:\n  openclaw config set plugins.entries.ws-ckpt.config.autoCheckpoint false --strict-json\n(This will cause a Gateway restart.)`;
+      const persistErr = persistConfig({ autoCheckpoint: coerced });
+      const persistNote = persistErr
+        ? `\n\nWARNING: Failed to persist config: ${persistErr}. Change is in-memory only.`
+        : "";
       return {
-        text: `Config updated: autoCheckpoint = ${coerced}${persistHint}`,
+        text: `Config updated: autoCheckpoint = ${coerced}${persistNote}`,
         isError: false,
       };
     }
@@ -418,7 +420,9 @@ export async function handleConfig(
       const cronMap = pluginState.resolvedConfig.cronSchedules ?? {};
       const warnings = await CrontabManager.migrate(oldWs, value, cronMap);
       pluginState.resolvedConfig.cronSchedules = cronMap;
-      let msg = `Config updated: workspace = ${value} (in-memory, will reset on Gateway restart)`;
+      const persistErr = persistConfig({ workspace: value, cronSchedules: cronMap });
+      let msg = `Config updated: workspace = ${value}`;
+      if (persistErr) msg += `\n\nWARNING: Failed to persist config: ${persistErr}. Change is in-memory only.`;
       if (warnings.length > 0) msg += "\n\n" + warnings.join("\n");
       return { text: msg, isError: false };
     }
@@ -448,13 +452,17 @@ export async function handleConfig(
       } else {
         delete cronMap[ws];
       }
-      let cronWarning = "";
+      const persistErr = persistConfig({ cronSchedules: pluginState.resolvedConfig.cronSchedules ?? {} });
+      let warnings = "";
+      if (persistErr) {
+        warnings += `\n\nWARNING: Failed to persist config: ${persistErr}. Change is in-memory only.`;
+      }
       if (!(await CrontabManager.syncWithRetry(ws, parsed.schedules))) {
-        cronWarning = "\n\nWARNING: Failed to sync crontab after 3 attempts. " +
+        warnings += "\n\nWARNING: Failed to sync crontab after 3 attempts. " +
           "Config saved but cron snapshots will not run until next session start or manual retry.";
       }
       return {
-        text: `cronSchedules updated for ${ws}: ${parsed.schedules.length > 0 ? JSON.stringify(parsed.schedules) : "(disabled)"}` + cronWarning,
+        text: `cronSchedules updated for ${ws}: ${parsed.schedules.length > 0 ? JSON.stringify(parsed.schedules) : "(disabled)"}` + warnings,
         isError: false,
       };
     }

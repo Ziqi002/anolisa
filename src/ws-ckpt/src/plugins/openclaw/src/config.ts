@@ -124,10 +124,10 @@ export class PluginConfigManager {
   /**
    * Create a new PluginConfigManager.
    *
-   * @param userConfig - Partial configuration from the plugin's config file.
+   * @param persistedConfig - Overrides from ~/.openclaw/ws-ckpt.json.
    */
-  constructor(userConfig: Partial<PluginConfig> = {}) {
-    this.config = { ...DEFAULT_CONFIG, ...userConfig };
+  constructor(persistedConfig: Partial<PluginConfig> = {}) {
+    this.config = { ...DEFAULT_CONFIG, ...persistedConfig };
     // Validate cronSchedules loaded from config file
     if (this.config.cronSchedules && typeof this.config.cronSchedules === "object") {
       const cleaned: Record<string, string[]> = {};
