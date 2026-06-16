@@ -529,15 +529,15 @@ def handle_ws_ckpt_config(args: Dict[str, Any], **_kwargs) -> str:
         if not value:
             return _err("workspace requires a path value")
         new_path = str(value).strip()
-        old_path = get_manager().config.workspace
-        err = _persist_plugin_yaml(workspace=new_path)
+        mgr = get_manager()
+        old_path = mgr.config.workspace
+        mgr.set_workspace(new_path)
+        from .cron import CrontabManager
+        cron_map = mgr.config.cron_schedules
+        warnings = CrontabManager.migrate(old_path, new_path, cron_map)
+        err = _persist_plugin_yaml(workspace=new_path, cronSchedules=cron_map)
         if err:
             return _err(f"Failed to persist config: {err}")
-        get_manager().set_workspace(new_path)
-        from .cron import CrontabManager
-        warnings = CrontabManager.migrate(
-            old_path, new_path, get_manager().config.cron_schedules
-        )
         msg = f"Config updated: workspace = {new_path}"
         if warnings:
             msg += "\n\n" + "\n".join(warnings)

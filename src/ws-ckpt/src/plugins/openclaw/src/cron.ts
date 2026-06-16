@@ -154,8 +154,12 @@ export class CrontabManager {
     schedulesMap: Record<string, string[]>,
   ): Promise<string[]> {
     const warnings: string[] = [];
-    const oldSchedules = schedulesMap[oldWorkspace] ?? [];
-    if (oldWorkspace && oldWorkspace !== newWorkspace && oldSchedules.length > 0) {
+    const schedules = schedulesMap[oldWorkspace] ?? [];
+    if (schedules.length > 0 && oldWorkspace !== newWorkspace) {
+      delete schedulesMap[oldWorkspace];
+      schedulesMap[newWorkspace] = schedules;
+    }
+    if (oldWorkspace && oldWorkspace !== newWorkspace) {
       if (!(await CrontabManager.removeWithRetry(oldWorkspace))) {
         warnings.push(
           `WARNING: Failed to remove cron entries for old workspace ${oldWorkspace}. ` +
@@ -163,9 +167,8 @@ export class CrontabManager {
         );
       }
     }
-    const newSchedules = schedulesMap[newWorkspace] ?? [];
-    if (newSchedules.length > 0) {
-      if (!(await CrontabManager.syncWithRetry(newWorkspace, newSchedules))) {
+    if (schedules.length > 0) {
+      if (!(await CrontabManager.syncWithRetry(newWorkspace, schedules))) {
         warnings.push(
           `WARNING: Failed to install cron entries for ${newWorkspace}. ` +
           `Cron snapshots will not run until next session start or manual retry.`

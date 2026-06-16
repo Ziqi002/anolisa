@@ -415,9 +415,9 @@ export async function handleConfig(
       }
       const oldWs = pluginState.resolvedConfig.workspace;
       pluginState.resolvedConfig.workspace = value;
-      const warnings = await CrontabManager.migrate(
-        oldWs, value, pluginState.resolvedConfig.cronSchedules
-      );
+      const cronMap = pluginState.resolvedConfig.cronSchedules ?? {};
+      const warnings = await CrontabManager.migrate(oldWs, value, cronMap);
+      pluginState.resolvedConfig.cronSchedules = cronMap;
       let msg = `Config updated: workspace = ${value} (in-memory, will reset on Gateway restart)`;
       if (warnings.length > 0) msg += "\n\n" + warnings.join("\n");
       return { text: msg, isError: false };

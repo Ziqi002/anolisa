@@ -168,18 +168,21 @@ class CrontabManager:
 
     @staticmethod
     def migrate(old_workspace: str, new_workspace: str, schedules_map: dict) -> List[str]:
-        """Remove old workspace entries and install new. Returns warning messages."""
+        """Migrate cron schedules to new workspace. Returns warnings.
+        Re-keys schedules_map in-place and syncs crontab.
+        """
         warnings: List[str] = []
-        old_schedules = schedules_map.get(old_workspace, [])
-        if old_workspace and old_workspace != new_workspace and old_schedules:
+        schedules = schedules_map.pop(old_workspace, [])
+        if schedules:
+            schedules_map[new_workspace] = schedules
+        if old_workspace and old_workspace != new_workspace:
             if not CrontabManager.remove_with_retry(old_workspace):
                 warnings.append(
                     f"WARNING: Failed to remove cron entries for old workspace {old_workspace}. "
                     f"Run `crontab -e` to manually remove lines containing -w '{old_workspace}'."
                 )
-        new_schedules = schedules_map.get(new_workspace, [])
-        if new_schedules:
-            if not CrontabManager.sync_with_retry(new_workspace, new_schedules):
+        if schedules:
+            if not CrontabManager.sync_with_retry(new_workspace, schedules):
                 warnings.append(
                     f"WARNING: Failed to install cron entries for {new_workspace}. "
                     f"Cron snapshots will not run until next session start or manual retry."
