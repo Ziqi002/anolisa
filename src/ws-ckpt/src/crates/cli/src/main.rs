@@ -185,7 +185,7 @@ enum Commands {
         format: String,
     },
 
-    /// Show diff between two snapshots
+    /// Show diff between two snapshots, or between a snapshot and the current workspace
     Diff {
         /// Workspace path or ID (absolute path, relative path, or workspace ID)
         #[arg(long, short = 'w', value_parser = workspace_value_parser())]
