@@ -68,6 +68,10 @@ pub async fn delete_snapshots_locked(
             Ok(deleted) if deleted.is_empty() => {
                 // Backend reported no-op (already gone); roll back the detach
                 // so the index doesn't drift.
+                tracing::warn!(
+                    "{}: re-inserted {} after backend no-op; DAG links may be stale (orphaned node)",
+                    label, snap_id,
+                );
                 arc.write()
                     .await
                     .index
@@ -84,7 +88,12 @@ pub async fn delete_snapshots_locked(
                     .index
                     .snapshots
                     .insert(snap_id.clone(), meta.clone());
-                tracing::warn!("{}: backend delete failed for {}: {:#}", label, snap_id, e);
+                tracing::warn!(
+                    "{}: backend delete failed for {}: {:#}; re-inserted as orphaned node",
+                    label,
+                    snap_id,
+                    e
+                );
                 failed.push((snap_id.clone(), format!("{:#}", e)));
             }
         }
