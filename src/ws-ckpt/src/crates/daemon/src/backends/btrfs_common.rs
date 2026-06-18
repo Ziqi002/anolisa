@@ -245,6 +245,11 @@ pub async fn diff_against_live(
     let h = RandomState::new().build_hasher().finish();
     let tmp_snap = snap_dir.join(format!(".diff-tmp-{:06x}", h & 0xFFFFFF));
 
+    // Clean up stale temp snapshot from a prior crash before creating a new one.
+    if tmp_snap.exists() {
+        let _ = delete_subvolume(&tmp_snap).await;
+    }
+
     create_snapshot(live_subvol, &tmp_snap, true)
         .await
         .context("failed to create temporary snapshot of live workspace for diff")?;
