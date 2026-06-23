@@ -253,13 +253,21 @@ enum Commands {
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
+    let is_daemon = matches!(cli.command, Commands::Daemon { .. });
+    let start = std::time::Instant::now();
 
     match run(cli).await {
         Ok(()) => {
+            if !is_daemon {
+                println!("Completed in {:.3}s", start.elapsed().as_secs_f64());
+            }
             // Post-command soft advisory: best-effort, silent on failure.
             print_health_advisory_if_needed().await;
         }
         Err(e) => {
+            if !is_daemon {
+                println!("Failed after {:.3}s", start.elapsed().as_secs_f64());
+            }
             eprintln!("\x1b[31mError: {:#}\x1b[0m", e);
             process::exit(1);
         }
