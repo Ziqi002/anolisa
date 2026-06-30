@@ -10,6 +10,19 @@ Agentic OS 内置软件，无需安装，支持 yum 安装。
 sudo yum install ws-ckpt
 ```
 
+注：需要配置 yum 仓库，在 `/etc/yum.repos.d/` 新建文件 `AliYunAgentic.repo`，内容如下：
+
+```bash
+[alinux4-agentic]
+name=alinux4-agentic
+baseurl=http://mirrors.cloud.aliyuncs.com/alinux/$releasever/agentic-os/$basearch/os/
+enabled=1
+gpgcheck=1
+gpgkey=http://mirrors.cloud.aliyuncs.com/alinux/$releasever/RPM-GPG-KEY-ALINUX-4
+
+```
+
+
 ## 二、操作
 
 ### 2.1 创建快照
