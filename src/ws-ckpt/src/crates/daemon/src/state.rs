@@ -311,6 +311,11 @@ impl DaemonState {
         Ok(())
     }
 
+    /// Seed the OnceCell after startup already called bootstrap directly.
+    pub fn mark_bootstrapped(&self) {
+        let _ = self.bootstrapped.set(());
+    }
+
     pub fn get_by_wsid(&self, ws_id: &str) -> Option<Arc<RwLock<WorkspaceState>>> {
         self.workspaces
             .get(ws_id)
