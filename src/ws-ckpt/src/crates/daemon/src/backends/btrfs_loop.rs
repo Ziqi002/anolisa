@@ -763,7 +763,12 @@ async fn find_backing_file(mount_path: &str) -> anyhow::Result<(String, PathBuf)
         .context("findmnt failed")?;
     let loop_dev = last_nonempty_line(&src).to_string();
     if loop_dev.is_empty() {
-        bail!("findmnt returned no SOURCE for {}", mount_path);
+        bail!(
+            "findmnt returned no SOURCE for {} (raw output: {:?}). \
+             Likely a mount-namespace inconsistency or stale /proc/mounts entry.",
+            mount_path,
+            src.trim()
+        );
     }
     let out = run_command("losetup", &["-nl", "--output", "BACK-FILE", &loop_dev])
         .await
