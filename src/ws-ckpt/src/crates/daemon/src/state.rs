@@ -313,7 +313,9 @@ impl DaemonState {
 
     /// Seed the OnceCell after startup already called bootstrap directly.
     pub fn mark_bootstrapped(&self) {
-        let _ = self.bootstrapped.set(());
+        if self.bootstrapped.set(()).is_err() {
+            warn!("mark_bootstrapped called but OnceCell already set; likely duplicate call");
+        }
     }
 
     pub fn get_by_wsid(&self, ws_id: &str) -> Option<Arc<RwLock<WorkspaceState>>> {
