@@ -468,15 +468,25 @@ impl StorageBackend for BtrfsLoopBackend {
         let mounted = is_mounted(&mount_path_str).await?;
         // External mount (k8s hostPath / bind-mount): overmount btrfs on top.
         let needs_mount = if mounted {
-            if is_external_mount(&mount_path_str).await.unwrap_or(false) {
-                info!(
-                    "{} has external mount; overmounting with btrfs loop image",
-                    mount_path_str
-                );
-                true
-            } else {
-                info!("Already mounted at {:?}", self.mount_path);
-                false
+            match is_external_mount(&mount_path_str).await {
+                Ok(true) => {
+                    info!(
+                        "{} has external mount; overmounting with btrfs loop image",
+                        mount_path_str
+                    );
+                    true
+                }
+                Ok(false) => {
+                    info!("Already mounted at {:?}", self.mount_path);
+                    false
+                }
+                Err(e) => {
+                    warn!(
+                        "is_external_mount({}) failed: {:#}; assuming ours, skip mount",
+                        mount_path_str, e
+                    );
+                    false
+                }
             }
         } else {
             true
@@ -573,71 +583,84 @@ pub async fn decide_effective_img_path(
             // K8s sidecar / hostPath scenario: mount_path has an external mount
             // (ext4, xfs, overlay, or non-loop btrfs). This is not ours — bootstrap
             // will overmount btrfs on top via mountPropagation.
-            if is_external_mount(&mount_path_str).await.unwrap_or(false) {
-                info!(
-                    "{} has an external (non-btrfs-loop) mount; \
-                     bootstrap will overmount with our btrfs image",
-                    mount_path_str
-                );
-                // Fall through to the cold path — return target so bootstrap proceeds.
-            } else {
-                match find_backing_file(&mount_path_str).await {
-                    Ok((loop_dev, backing)) => {
-                        // Orphan loop from a dead container: backing path only existed
-                        // inside the old container rootfs, not on this filesystem.
-                        if !tokio::fs::try_exists(&backing).await.unwrap_or(false) {
-                            warn!(
-                                "Loop {} backs phantom path {:?} (does not exist); \
-                                 treating mount as stale — falling through to cold path",
-                                loop_dev, backing
-                            );
-                            // Fall through to cold path like external-mount case.
-                        } else if backing == legacy {
-                            info!(
-                                "Backing {:?} is at legacy path; attempting live relocation to {:?}",
-                                legacy, target
-                            );
-                            match try_relocate_active_legacy_mount(
-                                &mount_path_str,
-                                legacy,
-                                target,
-                                &loop_dev,
-                            )
-                            .await
-                            {
-                                Ok(()) => {
-                                    info!(
-                                        "Live img migration complete: {:?} -> {:?}",
-                                        legacy, target
-                                    );
-                                    return Ok(target.to_path_buf());
+            match is_external_mount(&mount_path_str).await {
+                Ok(true) => {
+                    info!(
+                        "{} has an external (non-btrfs-loop) mount; \
+                         bootstrap will overmount with our btrfs image",
+                        mount_path_str
+                    );
+                    // Fall through to the cold path — return target so bootstrap proceeds.
+                }
+                Err(e) => {
+                    warn!(
+                        "is_external_mount({}) probe failed: {:#}; \
+                         falling through to cold path",
+                        mount_path_str, e
+                    );
+                    // Cannot determine mount ownership; fall through safely.
+                }
+                Ok(false) => {
+                    match find_backing_file(&mount_path_str).await {
+                        Ok((loop_dev, backing)) => {
+                            // Orphan loop from a dead container: backing path only existed
+                            // inside the old container rootfs, not on this filesystem.
+                            if !tokio::fs::try_exists(&backing).await.unwrap_or(false) {
+                                warn!(
+                                    "Loop {} backs phantom path {:?} (does not exist); \
+                                     treating mount as stale — falling through to cold path",
+                                    loop_dev, backing
+                                );
+                                // Fall through to cold path like external-mount case.
+                            } else if backing == legacy {
+                                info!(
+                                    "Backing {:?} is at legacy path; \
+                                     attempting live relocation to {:?}",
+                                    legacy, target
+                                );
+                                match try_relocate_active_legacy_mount(
+                                    &mount_path_str,
+                                    legacy,
+                                    target,
+                                    &loop_dev,
+                                )
+                                .await
+                                {
+                                    Ok(()) => {
+                                        info!(
+                                            "Live img migration complete: {:?} -> {:?}",
+                                            legacy, target
+                                        );
+                                        return Ok(target.to_path_buf());
+                                    }
+                                    Err(e) => {
+                                        error!(
+                                            "In-place relocation from legacy {:?} -> target \
+                                             {:?} aborted: {:#}. Daemon will keep serving on \
+                                             legacy this run; migration will retry on next \
+                                             start once the mount is idle.",
+                                            legacy, target, e
+                                        );
+                                        return Ok(legacy.to_path_buf());
+                                    }
                                 }
-                                Err(e) => {
-                                    error!(
-                                        "In-place relocation from legacy {:?} -> target {:?} \
-                                         aborted: {:#}. Daemon will keep serving on legacy this \
-                                         run; migration will retry on next start once the mount \
-                                         is idle.",
-                                        legacy, target, e
-                                    );
-                                    return Ok(legacy.to_path_buf());
-                                }
+                            } else {
+                                return Ok(backing);
                             }
-                        } else {
-                            return Ok(backing);
                         }
-                    }
-                    Err(e) => {
-                        bail!(
-                            "{} is mounted but backing-file lookup failed ({:#}). Refusing to \
-                             guess which img file backs the mount — picking the wrong file \
-                             would let bootstrap reconcile a stale image and let the next \
-                             cold start mount empty data, silently hiding the live workspace. \
-                             Diagnose with `findmnt -no SOURCE {0}` and `losetup -l <loop>`, \
-                             then restart the daemon.",
-                            mount_path_str,
-                            e
-                        );
+                        Err(e) => {
+                            bail!(
+                                "{} is mounted but backing-file lookup failed ({:#}). \
+                                 Refusing to guess which img file backs the mount — \
+                                 picking the wrong file would let bootstrap reconcile a \
+                                 stale image and let the next cold start mount empty data, \
+                                 silently hiding the live workspace. Diagnose with \
+                                 `findmnt -no SOURCE {0}` and `losetup -l <loop>`, \
+                                 then restart the daemon.",
+                                mount_path_str,
+                                e
+                            );
+                        }
                     }
                 }
             }
