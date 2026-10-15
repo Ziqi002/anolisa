@@ -249,13 +249,13 @@ pub async fn checkpoint(
                     .to_string(),
             })
         }
-        crate::state::Quiescence::MonitoringUnavailable => {
+        crate::state::Quiescence::MonitoringUnavailable(reason) => {
             return Ok(Response::Error {
                 code: ErrorCode::WriteLockConflict,
-                message:
-                    "Write monitoring is unavailable (the write watcher is stale and re-arming \
-                     failed). Please retry after the watcher recovers."
-                        .to_string(),
+                message: format!(
+                    "Write monitoring is unavailable, so active writes cannot be ruled out: \
+                     {reason}"
+                ),
             })
         }
     }
@@ -393,13 +393,23 @@ pub async fn rollback(
         return Ok(*resp);
     }
 
+    // 4a. Like checkpoint, refuse while no write watcher can run, so an
+    // exhausted inotify quota surfaces before the live subvolume is replaced.
+    if let Err(reason) = state.ensure_watcher(&ws.ws_id, &ws.path) {
+        return Ok(Response::Error {
+            code: ErrorCode::WriteLockConflict,
+            message: format!("Write monitoring is unavailable for this workspace: {reason}"),
+        });
+    }
+
     // 5. Rollback via backend (includes warmup, snapshot, cleanup)
     state.backend.rollback(&ws.ws_id, &resolved_id).await?;
 
     // 5a. The backend swapped the live subvolume (rename aside + snapshot
     // recreate + delete). The inotify watch still names the retired inode,
     // so re-arm it or every later checkpoint's quiescence check is a no-op.
-    state.rearm_watcher(&ws.ws_id, &ws.path);
+    // The rollback itself already succeeded; a failure is only reported.
+    let watcher_warning = state.ensure_watcher(&ws.ws_id, &ws.path).err();
 
     // 6. Update head + migrate LIVE_CHILD
     if let Some(old_head) = ws.index.head.clone() {
@@ -424,9 +434,17 @@ pub async fn rollback(
         );
     }
 
-    Ok(Response::RollbackOk {
-        from: ws.ws_id.clone(),
-        to: resolved_id,
+    let from = ws.ws_id.clone();
+    Ok(match watcher_warning {
+        None => Response::RollbackOk {
+            from,
+            to: resolved_id,
+        },
+        Some(warning) => Response::RollbackWithWarning {
+            from,
+            to: resolved_id,
+            warning,
+        },
     })
 }
 

@@ -336,7 +336,9 @@ async fn auto_init_workspace(
     );
     let resp = crate::workspace_mgr::init(state, workspace).await?;
     match resp {
-        Response::InitOk { ws_id } => {
+        // A watcher warning does not block the checkpoint here: its own
+        // quiescence check retries the watcher and refuses while it fails.
+        Response::InitOk { ws_id } | Response::InitWithWarning { ws_id, .. } => {
             tracing::info!("auto-init completed: ws_id={}", ws_id);
             Ok(None)
         }

@@ -183,7 +183,28 @@ async fn orphan_storage_paths(
 
 // ── init ──
 
+/// Register a workspace and make sure its write watcher runs.
+///
+/// Every successful path (fresh init, re-adoption, already registered) ends
+/// here, so a watcher that failed earlier (for example the inotify quota was
+/// exhausted at daemon start) is retried, and a failure is reported next to
+/// the successful registration instead of only in the daemon log.
 pub async fn init(state: &Arc<DaemonState>, workspace: &str) -> anyhow::Result<Response> {
+    let response = init_registration(state, workspace).await?;
+    let Response::InitOk { ws_id } = response else {
+        return Ok(response);
+    };
+    let Some(arc) = state.get_by_wsid(&ws_id) else {
+        return Ok(Response::InitOk { ws_id });
+    };
+    let path = arc.read().await.path.clone();
+    Ok(match state.ensure_watcher(&ws_id, &path) {
+        Ok(()) => Response::InitOk { ws_id },
+        Err(warning) => Response::InitWithWarning { ws_id, warning },
+    })
+}
+
+async fn init_registration(state: &Arc<DaemonState>, workspace: &str) -> anyhow::Result<Response> {
     if workspace.trim().is_empty() {
         return Ok(error_resp(
             ErrorCode::InvalidPath,
@@ -476,20 +497,10 @@ pub async fn init(state: &Arc<DaemonState>, workspace: &str) -> anyhow::Result<R
         warn!("save_manifest failed after init: {:#}", e);
     }
 
-    // Lifecycle window done (state + index_dir written). Watcher / warmup
-    // below only read paths, so let a queued recover proceed.
+    // Lifecycle window done (state + index_dir written). Warmup below only
+    // reads paths, so let a queued recover proceed.
     drop(_wsid_guard);
     drop(init_guard);
-
-    // 13b. Start file watcher for write-lock detection
-    match crate::fs_watcher::WorkspaceWatcher::start(&abs_path) {
-        Ok(watcher) => {
-            state.register_watcher(ws_id.clone(), watcher);
-        }
-        Err(e) => {
-            warn!("Failed to start watcher for {}: {}", ws_id, e);
-        }
-    }
 
     // 13b. Warmup btrfs metadata cache for subsequent operations
     let subvol_path = state.backend.data_root().join(&ws_id);

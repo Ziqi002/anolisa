@@ -24,20 +24,18 @@ use crate::index_store;
 
 /// Outcome of the workspace quiescence check.
 ///
-/// [`Quiescence::MonitoringUnavailable`] is the fail-closed verdict for a
-/// watch that is known stale (its inode is no longer behind the
-/// registration path) and could not be re-armed: the retired inode's flag
-/// is permanently silent, so treating it as "not writing" would assume
-/// quiescence without any monitoring behind it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// [`Quiescence::MonitoringUnavailable`] is the fail-closed verdict when no
+/// current watch can be armed: the watcher never started (for example the
+/// inotify quota was exhausted) or is stale and re-arming failed. Treating
+/// either as "not writing" would assume quiescence without any monitoring.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Quiescence {
-    /// No recent writes observed by a current (or absent) watcher.
+    /// No recent writes observed by a current watcher.
     Safe,
     /// The watcher observed writes inside the quiet period.
     Writing,
-    /// The watch is known stale and re-arming failed; quiescence cannot
-    /// be established.
-    MonitoringUnavailable,
+    /// No current watch could be armed; carries the start failure.
+    MonitoringUnavailable(String),
 }
 
 /// Resolve parent aliases without following the final workspace symlink.
@@ -877,41 +875,66 @@ impl DaemonState {
     }
 
     /// Re-arm the write watcher for `ws_id` after the backend swapped the
-    /// live subvolume behind the registration path (rollback). inotify
-    /// watches inodes, not paths, so the old watch keeps observing the
-    /// retired subvolume and the quiescence guard would be permanently
-    /// inert for the rest of the daemon's lifetime.
-    ///
-    /// Returns whether a current watch is in place afterwards: `false`
-    /// means the stored watch is known stale and re-arming failed, so
-    /// quiescence cannot be established from it.
+    /// live subvolume behind the registration path (rollback).
     pub fn rearm_watcher(&self, ws_id: &str, registration_path: &Path) -> bool {
-        match WorkspaceWatcher::start(registration_path) {
+        self.start_watcher(ws_id, registration_path).is_ok()
+    }
+
+    fn start_watcher(&self, ws_id: &str, registration_path: &Path) -> Result<(), String> {
+        self.replace_watcher(ws_id, || WorkspaceWatcher::start(registration_path))
+    }
+
+    fn replace_watcher<F>(&self, ws_id: &str, create: F) -> Result<(), String>
+    where
+        F: FnOnce() -> anyhow::Result<WorkspaceWatcher>,
+    {
+        let old = self
+            .watchers
+            .lock()
+            .map_err(|_| "write watcher registry is unavailable".to_string())?
+            .remove(ws_id);
+        drop(old);
+
+        match create() {
             Ok(watcher) => {
-                self.register_watcher(ws_id.to_string(), watcher);
-                true
+                self.watchers
+                    .lock()
+                    .map_err(|_| "write watcher registry is unavailable".to_string())?
+                    .insert(ws_id.to_string(), watcher);
+                Ok(())
             }
             Err(e) => {
-                warn!(
-                    "failed to re-arm write watcher for {} after subvolume swap: {}",
-                    ws_id, e
-                );
-                false
+                let reason = format!("{e:#}");
+                warn!("failed to start write watcher for {}: {}", ws_id, reason);
+                Err(reason)
             }
         }
     }
 
+    /// Start the write watcher when it is missing or stale; keep a current one.
+    pub(crate) fn ensure_watcher(
+        &self,
+        ws_id: &str,
+        registration_path: &Path,
+    ) -> Result<(), String> {
+        if self.watcher_target_is_current(ws_id, registration_path) {
+            return Ok(());
+        }
+        self.start_watcher(ws_id, registration_path)
+    }
+
     /// True when the stored watch targets the inode currently behind the
-    /// registration path. A missing path keeps the existing watch (the
-    /// detached-registration guard already refuses operations there).
+    /// registration path. A missing watcher is never current. A missing path
+    /// keeps the existing watch (the detached-registration guard already
+    /// refuses operations there).
     fn watcher_target_is_current(&self, ws_id: &str, registration_path: &Path) -> bool {
         use std::os::unix::fs::MetadataExt;
         let watchers = match self.watchers.lock() {
             Ok(w) => w,
-            Err(_) => return true,
+            Err(_) => return false,
         };
         let Some(w) = watchers.get(ws_id) else {
-            return true;
+            return false;
         };
         match std::fs::metadata(registration_path) {
             Ok(meta) => w.target_identity() == (meta.dev(), meta.ino()),
@@ -927,8 +950,10 @@ impl DaemonState {
     /// path must not depend on it. Callers without the lock pass `None` and
     /// the heal uses the workspace state opportunistically.
     ///
-    /// Returns [`Quiescence::Safe`] when no watcher is registered (the
-    /// long-standing contract: registration alone gates the flows).
+    /// A watcher that never started (for example because the inotify quota
+    /// was exhausted at daemon start) is started here on demand; while it
+    /// cannot start the verdict is [`Quiescence::MonitoringUnavailable`],
+    /// never [`Quiescence::Safe`].
     pub async fn check_workspace_quiescent(
         &self,
         ws_id: &str,
@@ -950,22 +975,24 @@ impl DaemonState {
         let mut fresh_watch = false;
         if let Some(path) = heal_path {
             if !self.watcher_target_is_current(ws_id, &path) {
-                if self.rearm_watcher(ws_id, &path) {
-                    fresh_watch = true;
-                } else {
-                    // The watch is known stale and re-arming failed: monitoring
-                    // is unavailable, so quiescence cannot be established from
-                    // the retired inode's (permanently silent) flag. Report that
-                    // instead of assuming quiescence.
-                    return Quiescence::MonitoringUnavailable;
+                // The watch is missing or known stale and could not be armed:
+                // quiescence cannot be established from a silent flag, so
+                // report the failure instead of assuming quiescence.
+                if let Err(reason) = self.start_watcher(ws_id, &path) {
+                    return Quiescence::MonitoringUnavailable(reason);
                 }
+                fresh_watch = true;
             }
         }
         // Extract the AtomicBool from the watcher without holding the lock across await
         let is_writing_arc = {
             let watchers = match self.watchers.lock() {
                 Ok(w) => w,
-                Err(_) => return Quiescence::Safe,
+                Err(_) => {
+                    return Quiescence::MonitoringUnavailable(
+                        "write watcher registry is unavailable".to_string(),
+                    )
+                }
             };
             match watchers.get(ws_id) {
                 Some(w) => Some(std::sync::Arc::clone(&w.is_writing_flag())),
@@ -973,7 +1000,10 @@ impl DaemonState {
             }
         };
         match is_writing_arc {
-            None => Quiescence::Safe,
+            // Only reachable when the opportunistic heal above could not run.
+            None => Quiescence::MonitoringUnavailable(
+                "no write watcher is running for this workspace".to_string(),
+            ),
             Some(flag) => {
                 // A freshly re-armed watcher's flag starts false and is set
                 // asynchronously by its forwarder task, so an already-active
@@ -2322,6 +2352,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn full_quota_rearm_releases_the_stale_slot_before_replacement() {
+        // Model an instance quota with no spare slot. Even if notify has not
+        // released the kernel fd quickly enough for the first replacement,
+        // the stale watcher must be gone so the next lazy retry can recover.
+        use std::os::unix::fs::MetadataExt;
+        let (root, state, anchor) = watcher_fixture();
+        let watcher =
+            crate::fs_watcher::WorkspaceWatcher::start(&anchor).expect("arm initial watch");
+        state.register_watcher("ws".to_string(), watcher);
+        swap_live_inode(root.path());
+
+        let first = state.replace_watcher("ws", || {
+            assert!(
+                state.watchers.lock().unwrap().get("ws").is_none(),
+                "the stale watcher must release its quota slot first"
+            );
+            Err(anyhow::anyhow!("Too many open files (os error 24)"))
+        });
+        assert!(first.is_err());
+        assert!(state.watchers.lock().unwrap().get("ws").is_none());
+
+        state
+            .ensure_watcher("ws", &anchor)
+            .expect("the next lazy retry should install the replacement");
+        let current = std::fs::metadata(&anchor).unwrap();
+        assert_eq!(stored_target(&state, "ws"), (current.dev(), current.ino()));
+    }
+
+    #[tokio::test]
     async fn rearm_is_a_noop_when_the_target_is_current() {
         // Healthy path: no swap, the quiescence check must not churn the
         // watcher (pinned via the monotonic seq).
@@ -2349,24 +2408,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rearm_survives_a_missing_registration_path() {
-        // Detached registration: the path cannot be resolved; the re-arm
-        // fails, the old watch is retained, and the quiescence check keeps
-        // today's contract (true — the detached-registration guard refuses
-        // operations anyway).
+    async fn failed_rearm_does_not_keep_the_old_watcher() {
+        // Once re-arm starts, retaining the old instance would consume the
+        // quota slot while providing no monitoring for the registration path.
         let (root, state, anchor) = watcher_fixture();
         let watcher =
             crate::fs_watcher::WorkspaceWatcher::start(&anchor).expect("arm initial watch");
-        let old_target = watcher.target_identity();
         state.register_watcher("ws".to_string(), watcher);
 
         std::fs::remove_file(root.path().join("ws")).unwrap();
         assert!(!state.rearm_watcher("ws", &anchor));
-        assert_eq!(stored_target(&state, "ws"), old_target);
-        assert_eq!(
+        assert!(state.watchers.lock().unwrap().get("ws").is_none());
+        assert!(matches!(
             state.check_workspace_quiescent("ws", None).await,
-            Quiescence::Safe
-        );
+            Quiescence::MonitoringUnavailable(_)
+        ));
     }
 
     #[tokio::test]
@@ -2527,5 +2583,31 @@ mod tests {
             state.check_workspace_quiescent("ws", Some(&anchor)).await,
             Quiescence::Safe
         );
+    }
+
+    #[tokio::test]
+    async fn a_watcher_that_never_started_is_started_on_demand() {
+        // Daemon start may leave a workspace without a watcher (inotify
+        // quota exhausted); once the cause is gone the next check starts it.
+        let (_root, state, anchor) = watcher_fixture();
+        assert!(state.watchers.lock().unwrap().get("ws").is_none());
+
+        assert_eq!(
+            state.check_workspace_quiescent("ws", Some(&anchor)).await,
+            Quiescence::Safe
+        );
+        let _ = stored_target(&state, "ws");
+    }
+
+    #[tokio::test]
+    async fn a_watcher_that_cannot_start_refuses_instead_of_reporting_safe() {
+        // Before: no registered watcher meant Safe, so checkpoints silently
+        // ran without write detection. Now the start failure is reported.
+        let (root, state, anchor) = watcher_fixture();
+        std::fs::remove_file(root.path().join("ws")).unwrap();
+
+        let verdict = state.check_workspace_quiescent("ws", Some(&anchor)).await;
+        assert!(matches!(verdict, Quiescence::MonitoringUnavailable(_)));
+        assert!(state.ensure_watcher("ws", &anchor).is_err());
     }
 }

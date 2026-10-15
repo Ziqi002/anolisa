@@ -394,6 +394,21 @@ pub enum Response {
         snapshots: Vec<SnapshotListItem>,
         next_cursor: Option<String>,
     },
+    /// Init succeeded, but the workspace write watcher is not running, so
+    /// checkpoint and rollback are refused until it starts.
+    InitWithWarning {
+        ws_id: String,
+        /// Watcher start failure, including how to raise an exhausted inotify limit.
+        warning: String,
+    },
+    /// Rollback succeeded, but the write watcher could not be re-armed on the
+    /// new live subvolume.
+    RollbackWithWarning {
+        from: String,
+        to: String,
+        /// Watcher start failure, including how to raise an exhausted inotify limit.
+        warning: String,
+    },
 }
 
 /// Daemon-resolved recovery target; execution revalidates it under lifecycle locks.
@@ -1881,6 +1896,25 @@ mod tests {
             }
             _ => panic!("expected RollbackOk variant"),
         }
+    }
+
+    #[test]
+    fn watcher_warning_responses_round_trip() {
+        let init = round_trip_response(&Response::InitWithWarning {
+            ws_id: "ws-1".to_string(),
+            warning: "quota".to_string(),
+        });
+        assert!(matches!(init, Response::InitWithWarning { ws_id, warning }
+            if ws_id == "ws-1" && warning == "quota"));
+        let rollback = round_trip_response(&Response::RollbackWithWarning {
+            from: "ws-1".to_string(),
+            to: "snap".to_string(),
+            warning: "quota".to_string(),
+        });
+        assert!(
+            matches!(rollback, Response::RollbackWithWarning { from, to, warning }
+            if from == "ws-1" && to == "snap" && warning == "quota")
+        );
     }
 
     #[test]

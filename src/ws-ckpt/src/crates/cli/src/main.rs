@@ -978,12 +978,25 @@ async fn print_health_advisory_if_needed() {
     eprintln!("\x1b[33m      ws-ckpt config -g --enable-auto-cleanup --auto-cleanup-keep 1000 --auto-cleanup-interval 86400\x1b[0m");
 }
 
+/// Warn that an operation succeeded while its workspace has no write watcher.
+fn print_watcher_warning(warning: &str) {
+    eprintln!("\x1b[33m⚠ Warning: the workspace write watcher is not running: {warning}\x1b[0m");
+    eprintln!(
+        "\x1b[33m  Checkpoint and rollback on this workspace are refused until the watcher \
+         starts.\x1b[0m"
+    );
+}
+
 /// Handle the response, printing formatted output.
 /// If ConfirmationRequired, prompt user and re-send with force=true.
 async fn handle_response(response: Response, original_request: &Request) -> Result<()> {
     match response {
         Response::InitOk { ws_id } => {
             println!("\x1b[32m✓ Workspace initialized: {}\x1b[0m", ws_id);
+        }
+        Response::InitWithWarning { ws_id, warning } => {
+            println!("\x1b[32m✓ Workspace initialized: {}\x1b[0m", ws_id);
+            print_watcher_warning(&warning);
         }
         Response::CheckpointOk { snapshot_id } => {
             println!("\x1b[32m✓ Checkpoint created: {}\x1b[0m", snapshot_id);
@@ -993,6 +1006,13 @@ async fn handle_response(response: Response, original_request: &Request) -> Resu
                 "\x1b[32m✓ Rolled back workspace {} to snapshot: {}\x1b[0m",
                 from, to
             );
+        }
+        Response::RollbackWithWarning { from, to, warning } => {
+            println!(
+                "\x1b[32m✓ Rolled back workspace {} to snapshot: {}\x1b[0m",
+                from, to
+            );
+            print_watcher_warning(&warning);
         }
         Response::DeleteOk { target } => {
             println!("\x1b[32m✓ Deleted: {}\x1b[0m", target);
@@ -2087,7 +2107,7 @@ fn unlanded_global_settings(
     unlanded
 }
 
-/// Render a daemon-returned [`ConfigReport`] as the same [`GlobalConfigJson`]
+/// Render a daemon-returned [`ws_ckpt_common::ConfigReport`] as the same [`GlobalConfigJson`]
 /// schema that `config -g --format json` emits. Used by `-g update` to emit
 /// the post-reload state on stdout without a follow-up `Config` IPC.
 fn config_report_to_global_json(cr: &ws_ckpt_common::ConfigReport) -> GlobalConfigJson {

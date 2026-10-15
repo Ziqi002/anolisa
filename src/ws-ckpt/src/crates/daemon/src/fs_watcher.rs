@@ -12,6 +12,31 @@ use tracing::warn;
 /// without waiting on inotify event delivery.
 static WATCH_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+const INSTANCE_LIMIT_HINT: &str = "Each workspace needs one inotify instance, and the per-user \
+     fs.inotify.max_user_instances limit is likely exhausted. Check it with \
+     `sysctl fs.inotify.max_user_instances`; raise it above the workspace count plus other \
+     inotify users, for example `sudo sysctl -w fs.inotify.max_user_instances=2048`, and persist \
+     the setting under /etc/sysctl.d/. If the limit is already high, check LimitNOFILE.";
+
+const WATCH_LIMIT_HINT: &str = "The per-user fs.inotify.max_user_watches limit is exhausted. \
+     Check it with `sysctl fs.inotify.max_user_watches`; raise it based on the total number of \
+     watched directories, for example `sudo sysctl -w fs.inotify.max_user_watches=524288`, and \
+     persist the setting under /etc/sysctl.d/.";
+
+fn watch_error(stage: &str, path: &Path, error: notify::Error) -> anyhow::Error {
+    let hint = match &error.kind {
+        notify::ErrorKind::Io(io) if io.raw_os_error() == Some(libc::EMFILE) => {
+            Some(INSTANCE_LIMIT_HINT)
+        }
+        notify::ErrorKind::MaxFilesWatch => Some(WATCH_LIMIT_HINT),
+        _ => None,
+    };
+    match hint {
+        Some(hint) => anyhow::anyhow!("Failed to {stage} for {path:?}: {error}. {hint}"),
+        None => anyhow::Error::new(error),
+    }
+}
+
 /// Recursive workspace write watcher. CLOSE_WRITE clears the flag so
 /// checkpoint can skip the quiescence wait when all writers have closed.
 pub struct WorkspaceWatcher {
@@ -45,11 +70,11 @@ impl WorkspaceWatcher {
                 // Best-effort: if the receiver is gone we simply drop the event.
                 let _ = tx.send(res);
             })
-            .map_err(|e| anyhow::anyhow!("Failed to init notify watcher for {:?}: {}", path, e))?;
+            .map_err(|e| watch_error("init notify watcher", &path, e))?;
 
         watcher
             .watch(&path, RecursiveMode::Recursive)
-            .map_err(|e| anyhow::anyhow!("Failed to add recursive watch for {:?}: {}", path, e))?;
+            .map_err(|e| watch_error("add recursive watch", &path, e))?;
 
         // std::fs::metadata FOLLOWS symlinks, so this is the directory
         // inode inotify actually observes — the identity to compare against
@@ -194,6 +219,36 @@ mod tests {
         let watcher = WorkspaceWatcher::start(dir.path()).unwrap();
         watcher.stop();
         assert_eq!(watcher.workspace_path(), dir.path());
+    }
+
+    #[test]
+    fn quota_errors_name_the_limit_to_raise() {
+        let path = Path::new("/ws");
+        let instances = watch_error(
+            "init notify watcher",
+            path,
+            notify::Error::io(std::io::Error::from_raw_os_error(libc::EMFILE)),
+        )
+        .to_string();
+        assert!(instances.contains("Too many open files"));
+        assert!(instances.contains("sudo sysctl -w fs.inotify.max_user_instances="));
+
+        let watches = watch_error(
+            "add recursive watch",
+            path,
+            notify::Error::new(notify::ErrorKind::MaxFilesWatch),
+        )
+        .to_string();
+        assert!(watches.contains("OS file watch limit reached"));
+        assert!(watches.contains("sudo sysctl -w fs.inotify.max_user_watches="));
+
+        // Unknown failures must be passed through without inferred context.
+        let missing = notify::Error::io(std::io::Error::from_raw_os_error(libc::ENOENT));
+        let expected = missing.to_string();
+        assert_eq!(
+            watch_error("add recursive watch", path, missing).to_string(),
+            expected
+        );
     }
 
     #[tokio::test]

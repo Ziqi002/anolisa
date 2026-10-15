@@ -29,3 +29,7 @@ coverage/
 
 # agent output
 docs/agents/*
+
+# agent local constraint
+AGENTS.md
+CLAUDE.md

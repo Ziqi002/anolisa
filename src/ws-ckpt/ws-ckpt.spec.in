@@ -99,6 +99,25 @@ install -p -m 0755 scripts/hermes/uninstall-hermes.sh %{buildroot}%{_datadir}/an
 %{_datadir}/anolisa/adapters/ws-ckpt/
 
 %post
+# One watcher instance is required per workspace. This is advisory only:
+# package installation must not change host-wide kernel policy.
+inotify_instances_file=/proc/sys/fs/inotify/max_user_instances
+if [ -r "$inotify_instances_file" ]; then
+    inotify_instances=$(cat "$inotify_instances_file" 2>/dev/null || true)
+    case "$inotify_instances" in
+        ''|*[!0-9]*) ;;
+        *)
+            if [ "$inotify_instances" -lt 2048 ]; then
+                echo "WARNING: fs.inotify.max_user_instances=$inotify_instances may be too low for large ws-ckpt installations."
+                echo "         ws-ckpt uses one inotify instance per workspace."
+                echo "         Check:  sysctl fs.inotify.max_user_instances"
+                echo "         Adjust: sudo sysctl -w fs.inotify.max_user_instances=2048"
+                echo "         Persist the setting under /etc/sysctl.d/."
+            fi
+            ;;
+    esac
+fi
+
 if [ $1 -ge 2 ]; then
     # Upgrade: try remove legacy binary from old FHS path
     if [ -e %{_bindir}/ws-ckpt ] && \

@@ -200,7 +200,7 @@ pub(crate) async fn checkpoint(
                 "workspace has active write operations; retry after it becomes quiescent",
             )
         }
-        crate::state::Quiescence::MonitoringUnavailable => {
+        crate::state::Quiescence::MonitoringUnavailable(_) => {
             return rejected(
                 GuardedCheckpointRejectionCodeV2::WriteLockConflict,
                 "write monitoring is unavailable (the write watcher is stale and re-arming \
@@ -505,7 +505,7 @@ pub(crate) async fn rollback(
                 "workspace has active write operations; retry after it becomes quiescent",
             )
         }
-        crate::state::Quiescence::MonitoringUnavailable => {
+        crate::state::Quiescence::MonitoringUnavailable(_) => {
             return rollback_rejected(
                 GuardedRollbackRejectionCodeV2::WriteLockConflict,
                 "write monitoring is unavailable (the write watcher is stale and re-arming \
